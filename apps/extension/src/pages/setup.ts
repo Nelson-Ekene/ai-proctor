@@ -9,9 +9,6 @@ import {
   type SetupMeasurements,
 } from './setup-checks';
 
-/** UI refresh cadence while measuring (not a proctoring sampling rate). */
-const MEASURE_INTERVAL_MS = 200;
-
 const app = document.getElementById('app') as HTMLElement;
 
 const CHECKS = [
@@ -38,7 +35,7 @@ async function measure(
 
   let detector: FaceCounter | undefined;
   try {
-    detector = await createFaceCounter();
+    detector = await createFaceCounter(policy.setupCheck.faceMinConfidence);
   } catch (error) {
     console.warn('[proctor] face model unavailable', error);
   }
@@ -58,7 +55,7 @@ async function measure(
       m.faceCounts.push(detector.count(video, t0));
       m.inferenceMs.push(performance.now() - t0);
     }
-    await new Promise((resolve) => setTimeout(resolve, MEASURE_INTERVAL_MS));
+    await new Promise((resolve) => setTimeout(resolve, policy.setupCheck.measureIntervalMs));
   }
   detector?.close();
   await audio.close();

@@ -64,7 +64,7 @@ describe('evaluateSetup', () => {
     const strict = parsePolicy({
       ...DEFAULT_POLICY,
       setupCheck: {
-        sampleSeconds: 3,
+        ...DEFAULT_POLICY.setupCheck,
         micLevelMin: 0.1,
         faceFrameRatioMin: 1,
         inferenceBudgetMs: 10,

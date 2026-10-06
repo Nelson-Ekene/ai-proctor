@@ -3,9 +3,11 @@ import {
   acceptAndCompleteSetup,
   badgeText,
   expect,
+  failNextConsents,
   mockState,
   offscreenCount,
   startSession,
+  storedStatus,
   test,
 } from '../fixtures.ts';
 
@@ -93,19 +95,61 @@ test('ending the session turns the camera, microphone and indicator off', async 
   expect((await mockState()).ends.map((e) => e.sessionId)).toEqual(['sess-demo']);
 });
 
-test('closing the exam tab ends capture', async ({ context, host, serviceWorker }) => {
+test('closing the exam tab ends the session and turns media off', async ({
+  context,
+  host,
+  serviceWorker,
+}) => {
   await acceptAndCompleteSetup(await startSession(context, host));
   await expect.poll(() => offscreenCount(serviceWorker)).toBe(1);
   await host.close();
+  await expect.poll(() => storedStatus(serviceWorker)).toBe('ended');
   await expect.poll(() => offscreenCount(serviceWorker)).toBe(0);
   await expect.poll(() => badgeText(serviceWorker)).toBe('');
+  expect((await mockState()).ends.map((e) => e.sessionId)).toEqual(['sess-demo']);
 });
 
-test('the indicator survives a reload of the exam page', async ({ context, host }) => {
+test('a page refresh does NOT end the session; capture and the indicator continue', async ({
+  context,
+  host,
+  serviceWorker,
+}) => {
   await acceptAndCompleteSetup(await startSession(context, host));
   await expect(host.locator(INDICATOR)).toBeVisible();
+
   await host.reload();
   await expect(host.locator(INDICATOR)).toBeVisible();
+  // Let any (incorrect) tab-close handling run before asserting it did not.
+  await host.waitForTimeout(1000);
+  expect(await storedStatus(serviceWorker)).toBe('active');
+  expect(await offscreenCount(serviceWorker)).toBe(1);
+  expect(await badgeText(serviceWorker)).toBe('ON');
+  expect((await mockState()).ends).toEqual([]);
+});
+
+test('accept fails cleanly when the server is unreachable, and retry proceeds', async ({
+  context,
+  host,
+  serviceWorker,
+}) => {
+  const consent = await startSession(context, host);
+  await failNextConsents(1);
+  await consent.check('#agree-checkbox');
+  await consent.click('#agree');
+
+  await expect(consent.locator('#error')).toBeVisible();
+  await expect(consent.locator('#error')).toContainText(
+    "Couldn't reach the server, please try again.",
+  );
+  await expect(consent.locator('#retry')).toBeEnabled();
+  expect(await storedStatus(serviceWorker)).toBe('awaiting_consent');
+  expect(await offscreenCount(serviceWorker)).toBe(0);
+  expect(consent.url()).toContain('consent.html');
+
+  await consent.click('#retry');
+  await consent.waitForURL(/setup\.html/);
+  expect(await storedStatus(serviceWorker)).toBe('setup');
+  expect((await mockState()).consents.map((c) => c.decision)).toEqual(['accepted']);
 });
 
 test('an API host that is not allow-listed is refused before anything opens', async ({

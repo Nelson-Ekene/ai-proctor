@@ -88,6 +88,20 @@ export function offscreenCount(sw: Worker): Promise<number> {
   });
 }
 
+/** Session status as persisted by the service worker (chrome.storage.session). */
+export function storedStatus(sw: Worker): Promise<string | undefined> {
+  return sw.evaluate(async () => {
+    const data = await chrome.storage.session.get('proctor.session');
+    const stored = data['proctor.session'] as { session: { status: string } } | undefined;
+    return stored?.session.status;
+  });
+}
+
+/** Makes the next `count` consent uploads fail with 503. */
+export async function failNextConsents(count: number): Promise<void> {
+  await fetch(`${API_URL}/__test/fail-consents?count=${String(count)}`, { method: 'POST' });
+}
+
 /** Accepts consent, runs the setup check and continues. Returns console warnings from setup. */
 export async function acceptAndCompleteSetup(consent: Page): Promise<string[]> {
   const warnings: string[] = [];

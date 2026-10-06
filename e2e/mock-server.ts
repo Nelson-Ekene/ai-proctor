@@ -18,6 +18,8 @@ export interface MockState {
 }
 
 const state: MockState = { sessionFetches: [], consents: [], ends: [] };
+/** Number of upcoming consent POSTs to fail with 503 (simulates an unreachable backend). */
+let failConsents = 0;
 
 function send(
   res: ServerResponse,
@@ -98,13 +100,19 @@ async function handleHost(path: string): Promise<Reply> {
   return { status: 404, body: 'not found', type: 'text/plain' };
 }
 
-async function handleApi(req: IncomingMessage, path: string): Promise<Reply> {
+async function handleApi(req: IncomingMessage, url: URL): Promise<Reply> {
+  const path = url.pathname;
   // Test-only control endpoints.
   if (path === '/__test/state') return { status: 200, body: state };
   if (path === '/__test/reset' && req.method === 'POST') {
     state.sessionFetches.length = 0;
     state.consents.length = 0;
     state.ends.length = 0;
+    failConsents = 0;
+    return { status: 204 };
+  }
+  if (path === '/__test/fail-consents' && req.method === 'POST') {
+    failConsents = Number(url.searchParams.get('count') ?? '1');
     return { status: 204 };
   }
 
@@ -119,6 +127,10 @@ async function handleApi(req: IncomingMessage, path: string): Promise<Reply> {
   if (match && req.method === 'POST' && decodeURIComponent(match[1] ?? '') === sessionId) {
     const body = await readJson(req);
     if (match[2] === 'consents') {
+      if (failConsents > 0) {
+        failConsents -= 1;
+        return { status: 503, body: { error: 'unavailable' } };
+      }
       const parsed = ConsentRecordSchema.safeParse(body);
       if (!parsed.success) return { status: 400, body: { error: 'invalid consent record' } };
       state.consents.push({ sessionId, ...parsed.data });
@@ -140,8 +152,8 @@ const host = createServer((req, res) => {
 });
 
 const api = createServer((req, res) => {
-  const { pathname } = new URL(req.url ?? '/', `http://localhost:${String(API_PORT)}`);
-  void handleApi(req, pathname).then((r) => {
+  const url = new URL(req.url ?? '/', `http://localhost:${String(API_PORT)}`);
+  void handleApi(req, url).then((r) => {
     send(res, r.status, r.body, r.type);
   });
 });

@@ -57,6 +57,10 @@ export const PolicySchema = z.strictObject({
   /** Pre-test setup check (a readiness check for the candidate, never an exam result). */
   setupCheck: z.strictObject({
     sampleSeconds: positive,
+    /** How often the check samples the preview and microphone while it runs. */
+    measureIntervalMs: positive,
+    /** Minimum detector confidence (0-1) for a face to count as present. */
+    faceMinConfidence: z.number().min(0).max(1),
     /** Minimum peak RMS level (0-1) for the microphone to count as working. */
     micLevelMin: z.number().min(0).max(1),
     /** Share of sampled frames that must contain a face. */
@@ -113,6 +117,8 @@ export const DEFAULT_POLICY: Policy = deepFreeze({
   setupCheck: {
     // ASSUMPTION: none of these are in the PRD; calibrate in the pilot.
     sampleSeconds: 3,
+    measureIntervalMs: 200,
+    faceMinConfidence: 0.5,
     micLevelMin: 0.02,
     faceFrameRatioMin: 0.5,
     inferenceBudgetMs: 200,

@@ -117,6 +117,21 @@ describe('policy validation', () => {
       false,
     );
     expect(PolicySchema.safeParse(patched('setupCheck', 'sampleSeconds', 0)).success).toBe(false);
+    expect(PolicySchema.safeParse(patched('setupCheck', 'measureIntervalMs', 0)).success).toBe(
+      false,
+    );
+    expect(PolicySchema.safeParse(patched('setupCheck', 'faceMinConfidence', 1.2)).success).toBe(
+      false,
+    );
+    const { setupCheck } = DEFAULT_POLICY;
+    expect(setupCheck).toEqual({
+      sampleSeconds: 3,
+      measureIntervalMs: 200,
+      faceMinConfidence: 0.5,
+      micLevelMin: 0.02,
+      faceFrameRatioMin: 0.5,
+      inferenceBudgetMs: 200,
+    });
   });
 
   it('allows burstFrames = 0 (burst disabled)', () => {

@@ -8,7 +8,8 @@ export interface FaceCounter {
   close(): void;
 }
 
-export async function createFaceCounter(): Promise<FaceCounter> {
+/** @param minConfidence detection threshold from the policy (0-1). */
+export async function createFaceCounter(minConfidence: number): Promise<FaceCounter> {
   const fileset = await FilesetResolver.forVisionTasks(chrome.runtime.getURL('vendor/mediapipe'));
   const detector = await FaceDetector.createFromOptions(fileset, {
     baseOptions: {
@@ -16,6 +17,7 @@ export async function createFaceCounter(): Promise<FaceCounter> {
       delegate: 'CPU',
     },
     runningMode: 'VIDEO',
+    minDetectionConfidence: minConfidence,
   });
   return {
     count: (video, timestampMs) => detector.detectForVideo(video, timestampMs).detections.length,

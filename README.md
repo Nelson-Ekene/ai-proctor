@@ -65,6 +65,18 @@ Chrome, and open <http://localhost:4400>.
 `ON` + in-page indicator → SDK `ready`. Declining or closing the notice records `declined` and
 starts nothing. Ending, or closing the exam tab, closes the offscreen document.
 
+## Release checklist
+
+- [ ] **Fix the production extension ID**: use the Chrome Web Store ID, or pin a self-generated
+      key in the manifest. Export it from the SDK as the default `extensionId` so integrators
+      don't need to pass it (BUILD_PLAN section 11).
+- [ ] **Confirm `externally_connectable` origins**: build with the real `PROCTOR_EXAM_ORIGINS`
+      and check `build/manifest.json` lists only those exam origins (no wildcards, no
+      `<all_urls>`). `src/manifest.test.ts` guards the generator.
+- [ ] **Remove unused permissions**: `alarms` is reserved for Phase 6 upload retries; drop it if
+      Phase 6 does not use it. Re-check `tabs` and `offscreen` are still needed.
+- [ ] **Verify CI**: the `check`, `e2e` and `infra` jobs pass on the release commit.
+
 ## Open questions
 
 Tracked in BUILD_PLAN.md section 9. Decisions taken in code, all policy-configurable:

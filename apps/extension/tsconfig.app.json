@@ -4,7 +4,8 @@
     "rootDir": "src",
     "outDir": "dist",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "types": ["chrome"]
+    "types": ["chrome"],
+    "allowImportingTsExtensions": true
   },
   "include": ["src"],
   "references": [{ "path": "../../packages/core" }]
