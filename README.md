@@ -36,4 +36,18 @@ until healthy, then `up minio-init`.
 
 ## Open questions
 
-Tracked in BUILD_PLAN.md section 9.
+Tracked in BUILD_PLAN.md section 9. Decisions taken in code, all policy-configurable:
+
+- **Does a merged violation's count multiply its points?** The PRD merges repeats "into one
+  violation with a count" but does not say. Default: no (`merge.countMultipliesPoints = false`),
+  so one merged violation contributes once.
+- **Merge window** is anchored at the violation's first anomaly (60 s default), not chained, so
+  a behaviour repeated all session produces one violation per window rather than one in total.
+- **Band edges with fractional scores:** risk is rounded to 2 dp, then `<= lowMax` is Low and
+  `<= mediumMax` is Medium. 29.01 is Medium under the default 29/59 bands.
+- **Severity at scoring time** is read from the policy, not the stored violation, so the same
+  violations can be re-scored under a different policy ("preview score impact").
+- **Weights may be 0** (e.g. an exam without audio) but must sum to 1. `capture.burstFrames`
+  may be 0. All other policy numbers must be positive.
+- **Browser event log retention** is `capture.logRetentionSeconds` (60 s default), validated to
+  cover the full -30 s / +15 s capture window.
