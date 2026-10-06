@@ -111,7 +111,7 @@ async function handleApi(req: IncomingMessage, path: string): Promise<Reply> {
   const sessionId = sessionFor(req);
   if (!sessionId) return { status: 401, body: { error: 'unauthorised' } };
 
-  if (path === '/v1/session' && req.method === 'GET') {
+  if (path === '/v1/sessions/current' && req.method === 'GET') {
     state.sessionFetches.push(sessionId);
     return { status: 200, body: { sessionId, policySnapshot: DEFAULT_POLICY } };
   }

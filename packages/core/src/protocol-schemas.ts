@@ -15,7 +15,7 @@ export const ExternalRequestSchema: z.ZodType<ExternalRequest> = z.discriminated
 
 // Extension <-> API contract (session-token authenticated). Implemented by apps/api in Phase 7.
 
-/** GET /v1/session: resolves the bearer session token to its session and policy snapshot. */
+/** GET /v1/sessions/current: resolves the bearer session token to its session and policy snapshot. */
 export const SessionInfoSchema = z.strictObject({
   sessionId: z.string().min(1),
   policySnapshot: PolicySchema,

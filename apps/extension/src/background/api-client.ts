@@ -52,7 +52,7 @@ export function createApiClient(fetchFn: typeof fetch = (...args) => fetch(...ar
 
   return {
     async fetchSession(apiBase, token) {
-      return SessionInfoSchema.parse(await call(apiBase, token, '/v1/session'));
+      return SessionInfoSchema.parse(await call(apiBase, token, '/v1/sessions/current'));
     },
     async postConsent(apiBase, token, sessionId, record) {
       await call(apiBase, token, `/v1/sessions/${encodeURIComponent(sessionId)}/consents`, record);

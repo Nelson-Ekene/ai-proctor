@@ -59,7 +59,7 @@ Chrome, and open <http://localhost:4400>.
 ### Session flow
 
 `Proctor.start({ sessionToken, apiBase, extensionId })` → the extension resolves the token via
-`GET /v1/session` (session id + policy snapshot) → consent notice (generated from the policy) →
+`GET /v1/sessions/current` (session id + policy snapshot) → consent notice (generated from the policy) →
 `POST /v1/sessions/:id/consents` → setup check (camera, mic, face, device speed; `ready` or
 `needs_attention`, never a gate on the exam) → offscreen document opens camera + mic → badge
 `ON` + in-page indicator → SDK `ready`. Declining or closing the notice records `declined` and
@@ -84,5 +84,5 @@ Tracked in BUILD_PLAN.md section 9. Decisions taken in code, all policy-configur
   cover the full -30 s / +15 s capture window.
 - **Setup-check thresholds** (`setupCheck.*`: mic level 0.02, face in 50% of frames, 200 ms
   inference budget, 3 s sample) are not in the PRD; calibrate in the pilot.
-- **API endpoints beyond BUILD_PLAN 5.5:** `GET /v1/session` and `POST /v1/sessions/:id/consents`
-  (session-token auth). Their schemas live in `packages/core/src/protocol-schemas.ts`.
+- **Session-token endpoints** `GET /v1/sessions/current` and `POST /v1/sessions/:id/consents`
+  are now in BUILD_PLAN 5.5. Their schemas live in `packages/core/src/protocol-schemas.ts`.

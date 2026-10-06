@@ -17,7 +17,7 @@ describe('api client', () => {
     );
     expect(info.sessionId).toBe('s1');
     const [url, init] = f.mock.calls[0] ?? [];
-    expect(url).toBe('http://api.test/v1/session');
+    expect(url).toBe('http://api.test/v1/sessions/current');
     expect(init?.method).toBe('GET');
     expect((init?.headers as Record<string, string>).authorization).toBe('Bearer tok');
   });

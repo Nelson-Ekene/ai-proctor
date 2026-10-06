@@ -125,6 +125,8 @@ Output shape: `{ risk, band, categories: [{category, weight, score, contribution
 ### 5.5 REST API (v1)
 
 - `POST /v1/sessions` (integrator, API key): start session, returns session token + policy snapshot
+- `GET /v1/sessions/current` (session token): returns the session and its policy snapshot (named to avoid confusion with the ranked list `GET /v1/sessions`)
+- `POST /v1/sessions/:id/consents` (session token): records accept or decline, with a timestamp and the notice version
 - `POST /v1/sessions/:id/anomalies` (session token): anomaly + evidence manifest
 - `PUT /v1/sessions/:id/evidence/:evidenceId` (session token): upload frame/clip (or presigned URL flow)
 - `POST /v1/sessions/:id/end`
@@ -268,3 +270,11 @@ False-positive marking to feed calibration; live monitoring; other browsers/mobi
 ## 10. Suggested first Claude Code message
 
 > Read CLAUDE.md, BUILD_PLAN.md and docs/PRD.pdf. Start Phase 0 only. Before writing code, summarise your plan in 10 lines and list any assumption you are making. Stop when Phase 0's "Done when" criteria pass and show me the commands you ran.
+
+## 11. Decisions made
+
+- **Extension ID:** `Proctor.start` takes `extensionId` as a third argument. The dev ID is pinned by `build:dev`; production e2e tests read the real ID at runtime. Before release the production ID must be fixed, either via the Chrome Web Store ID or a self-generated key pinned in the manifest, and the SDK should export a default production ID constant so integrators don't need to pass it.
+- **Consent:** accepting proceeds only after the server saves the consent record. Declining always succeeds locally. Closing the notice tab counts as declining. Declining only notifies the host page via the SDK (`consent_declined`); the extension never blocks or ends the exam itself.
+- **Setup check:** never blocks. Results are `ready` or `needs_attention`. Only camera and microphone permission gate progress.
+- **Tab lifecycle:** closing the exam tab ends the session and turns media off. A page refresh must NOT end the session.
+- **Open question (note only):** should hosts be able to resume a session after an accidental tab close?
