@@ -1,0 +1,8 @@
+node_modules
+dist
+coverage
+pnpm-lock.yaml
+docs/*.pdf
+# Hand-written planning docs; keep as authored
+BUILD_PLAN.md
+CLAUDE.md

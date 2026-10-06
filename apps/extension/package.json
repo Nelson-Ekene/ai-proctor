@@ -1,0 +1,10 @@
+{
+  "name": "@proctor/extension",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Chrome MV3 extension.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

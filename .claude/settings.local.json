@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 5432,9000,9001 } | Select-Object LocalPort,OwningProcess; docker info --format '{{.ServerVersion}}')",
+      "PowerShell(node \"C:\\\\Users\\\\ADMIN\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-ADMIN-Documents-AI-PROCTOR\\\\86bc2e7d-366f-4e71-b424-c2e5b0e945c3\\\\scratchpad\\\\scaffold.mjs\" \"C:\\\\Users\\\\ADMIN\\\\Documents\\\\AI_PROCTOR\")",
+      "PowerShell(pnpm add -D -w typescript vitest eslint @eslint/js typescript-eslint eslint-config-prettier prettier)"
+    ]
+  }
+}
