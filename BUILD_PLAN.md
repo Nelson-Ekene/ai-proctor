@@ -199,6 +199,8 @@ Content script feeds raw DOM events into the Phase 1 state machine; service work
 1. Orchestrator: on any anomaly, build the capture package: browser events -30/+15 s, burst of 3 extra frames, audio clip if present.
 2. Upload client with encrypted transport (HTTPS only), retry with exponential backoff, and an IndexedDB offline queue that survives browser restarts and drains on reconnect. Idempotency keys so retries never double-count a violation.
 3. Queue size cap and priority (anomaly evidence before low-value events). On session end, flush.
+4. Route the best-effort consent decline record (Phase 2) through the offline queue so it eventually reaches the server.
+5. Use `chrome.alarms` for upload retry scheduling (survives service-worker restarts). If it turns out not to be needed, remove the `alarms` permission before release.
 
 **Done when:** an e2e test simulates network loss mid-session; all evidence arrives exactly once after reconnect.
 
