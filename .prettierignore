@@ -1,6 +1,10 @@
 node_modules
 dist
+build
 coverage
+apps/extension/public/vendor
+test-results
+playwright-report
 pnpm-lock.yaml
 docs/*.pdf
 # Hand-written planning docs; keep as authored

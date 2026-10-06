@@ -1,0 +1,19 @@
+{
+  "name": "@proctor/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Playwright end-to-end tests: real Chromium, built extension, fake camera/mic, mock host and API.",
+  "type": "module",
+  "scripts": {
+    "mock": "tsx mock-server.ts",
+    "test": "playwright test"
+  },
+  "dependencies": {
+    "@proctor/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/chrome": "^0.3.4",
+    "tsx": "^4.23.15"
+  }
+}

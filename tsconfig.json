@@ -6,6 +6,7 @@
     { "path": "packages/ui" },
     { "path": "apps/extension" },
     { "path": "apps/api" },
-    { "path": "apps/dashboard" }
+    { "path": "apps/dashboard" },
+    { "path": "e2e" }
   ]
 }

@@ -54,6 +54,16 @@ export const PolicySchema = z.strictObject({
   inactivity: z.strictObject({ seconds: positive }),
   gazeAway: z.strictObject({ sustainedSeconds: positive }),
   retentionDays: z.number().int().positive(),
+  /** Pre-test setup check (a readiness check for the candidate, never an exam result). */
+  setupCheck: z.strictObject({
+    sampleSeconds: positive,
+    /** Minimum peak RMS level (0-1) for the microphone to count as working. */
+    micLevelMin: z.number().min(0).max(1),
+    /** Share of sampled frames that must contain a face. */
+    faceFrameRatioMin: z.number().min(0).max(1),
+    /** Median on-device face-detection time above which the device needs attention. */
+    inferenceBudgetMs: positive,
+  }),
 });
 
 export type Policy = z.infer<typeof PolicySchema>;
@@ -100,6 +110,13 @@ export const DEFAULT_POLICY: Policy = deepFreeze({
   inactivity: { seconds: 60 }, // ASSUMPTION: not specified in PRD
   gazeAway: { sustainedSeconds: 5 }, // ASSUMPTION: not specified in PRD
   retentionDays: 30, // ASSUMPTION: open question in PRD
+  setupCheck: {
+    // ASSUMPTION: none of these are in the PRD; calibrate in the pilot.
+    sampleSeconds: 3,
+    micLevelMin: 0.02,
+    faceFrameRatioMin: 0.5,
+    inferenceBudgetMs: 200,
+  },
 });
 
 /** Validates untrusted policy input. Throws a ZodError describing every problem. */

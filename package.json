@@ -9,6 +9,7 @@
   "scripts": {
     "test": "vitest run --coverage",
     "test:watch": "vitest",
+    "test:e2e": "pnpm --filter @proctor/sdk build && pnpm --filter @proctor/extension build && pnpm --filter @proctor/e2e test",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
     "typecheck": "tsc -b",
@@ -16,6 +17,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.1",
     "@vitest/coverage-v8": "^5.0.3",
     "eslint": "^10.12.0",
     "eslint-config-prettier": "^10.1.8",

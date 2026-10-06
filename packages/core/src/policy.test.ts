@@ -108,6 +108,17 @@ describe('policy validation', () => {
     expect(() => parsePolicy(p)).toThrow(/at least 1 ms/);
   });
 
+  it('validates the setup-check section', () => {
+    expect(PolicySchema.safeParse(patched('setupCheck', 'micLevelMin', 1.5)).success).toBe(false);
+    expect(PolicySchema.safeParse(patched('setupCheck', 'faceFrameRatioMin', -0.1)).success).toBe(
+      false,
+    );
+    expect(PolicySchema.safeParse(patched('setupCheck', 'inferenceBudgetMs', 0)).success).toBe(
+      false,
+    );
+    expect(PolicySchema.safeParse(patched('setupCheck', 'sampleSeconds', 0)).success).toBe(false);
+  });
+
   it('allows burstFrames = 0 (burst disabled)', () => {
     expect(PolicySchema.safeParse(patched('capture', 'burstFrames', 0)).success).toBe(true);
   });

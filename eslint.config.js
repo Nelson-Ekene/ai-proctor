@@ -3,7 +3,17 @@ import prettier from 'eslint-config-prettier';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['**/node_modules/**', '**/dist/**', '**/coverage/**'] },
+  {
+    ignores: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/build/**',
+      '**/coverage/**',
+      '**/public/vendor/**',
+      '**/test-results/**',
+      '**/playwright-report/**',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
@@ -15,6 +25,22 @@ export default tseslint.config(
         tsconfigRootDir: import.meta.dirname,
       },
     },
+    rules: {
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', ignoreRestSiblings: true },
+      ],
+    },
+  },
+  {
+    // Asserting on mocked methods (expect(deps.api.fetch).toHaveBeenCalled()) is idiomatic.
+    files: ['**/*.test.ts'],
+    rules: { '@typescript-eslint/unbound-method': 'off' },
+  },
+  {
+    // Node scripts.
+    files: ['**/scripts/**/*.mjs'],
+    languageOptions: { globals: { console: 'readonly', fetch: 'readonly', Buffer: 'readonly' } },
   },
   {
     // packages/core is pure: no DOM/Chrome/Node APIs (enforced by its tsconfig lib) and no
@@ -35,7 +61,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.js'],
+    files: ['**/*.js', '**/*.mjs'],
     ...tseslint.configs.disableTypeChecked,
   },
   prettier,

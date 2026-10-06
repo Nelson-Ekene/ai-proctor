@@ -8,3 +8,6 @@ export * from './merge';
 export * from './scoring';
 export * from './rules';
 export * from './capture';
+export * from './session';
+export * from './protocol';
+export * from './protocol-schemas';

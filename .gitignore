@@ -1,6 +1,10 @@
 node_modules/
 dist/
+build/
 coverage/
+apps/extension/public/vendor/
+test-results/
+playwright-report/
 *.tsbuildinfo
 .env
 .env.*

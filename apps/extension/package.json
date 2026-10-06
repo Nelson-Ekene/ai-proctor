@@ -4,7 +4,19 @@
   "private": true,
   "description": "Chrome MV3 extension.",
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
+  "scripts": {
+    "prepare-assets": "node scripts/prepare-assets.mjs",
+    "build": "node scripts/prepare-assets.mjs && vite build",
+    "build:dev": "node scripts/prepare-assets.mjs && vite build --mode development"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
+    "@proctor/core": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^3.0.0",
+    "@types/chrome": "^0.3.4",
+    "vite": "^8.3.3"
   }
 }

@@ -4,6 +4,7 @@
   "private": true,
   "description": "Pure logic: types, zod schemas, DEFAULT_POLICY, scoring, sampler, merger, rule engine.",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts"
   },

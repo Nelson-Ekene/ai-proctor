@@ -4,7 +4,17 @@
   "private": true,
   "description": "Host-page SDK: start a proctoring session and receive events.",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@proctor/core": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^8.3.3"
   }
 }
