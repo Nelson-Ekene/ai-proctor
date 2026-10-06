@@ -280,3 +280,9 @@ False-positive marking to feed calibration; live monitoring; other browsers/mobi
 - **Setup check:** never blocks. Results are `ready` or `needs_attention`. Only camera and microphone permission gate progress.
 - **Tab lifecycle:** closing the exam tab ends the session and turns media off. A page refresh must NOT end the session.
 - **Open question (note only):** should hosts be able to resume a session after an accidental tab close?
+
+## 12. Known gaps
+
+- The setup face check reports "needs attention" under Chrome's fake camera because the fake feed shows no face. Real face fixtures are part of Phase 4.
+- There is no extension popup (only the badge and its title). Not required by the PRD.
+- CI has not yet run on a real GitHub remote: the local repo has no remote configured, so the Actions workflow is unverified.
