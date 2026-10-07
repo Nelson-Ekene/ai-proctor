@@ -102,6 +102,11 @@ describe('policy validation', () => {
     expect(PolicySchema.safeParse(patched('capture', 'burstFrames', 1.5)).success).toBe(false);
   });
 
+  it('requires the activity ping to be shorter than the inactivity threshold', () => {
+    expect(() => parsePolicy(patched('inactivity', 'pingSeconds', 60))).toThrow(/pingSeconds/);
+    expect(PolicySchema.safeParse(patched('inactivity', 'pingSeconds', 0)).success).toBe(false);
+  });
+
   it('rejects sampling slots narrower than 1 ms', () => {
     const p = draft();
     p.sampling = { framesPerWindow: 10, windowSeconds: 0.005 };

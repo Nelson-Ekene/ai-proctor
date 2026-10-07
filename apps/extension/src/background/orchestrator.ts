@@ -1,11 +1,17 @@
 import {
   ExternalRequestSchema,
   captureAllowed,
+  createRuleEngineState,
   isTerminal,
+  stepRuleEngine,
   transition,
   type ConsentRecord,
+  type DetectedAnomaly,
   type ExternalErrorCode,
   type ExternalResponse,
+  type Policy,
+  type RawBrowserEvent,
+  type RuleEngineState,
   type SdkEventName,
   type SessionEvent,
   type SessionState,
@@ -25,6 +31,20 @@ export interface StoredSession {
   /** Tab showing the consent/setup pages, if open. */
   uiTabId?: number;
   readySent?: boolean;
+  /** Window holding the exam tab, for chrome.windows focus signals. */
+  examWindowId?: number;
+  /** Browser rule engine state, including the rolling type+timestamp log (Phase 3). */
+  rules?: RuleEngineState;
+  /** Anomalies detected but not yet packaged/uploaded (Phase 6 drains this). */
+  anomalies?: DetectedAnomaly[];
+}
+
+/** chrome.alarms cannot fire more often than every 30 s. */
+export const CHROME_MIN_ALARM_MINUTES = 0.5;
+
+/** Fallback tick for the inactivity timer when the page's own ticks are throttled. */
+export function rulesTickMinutes(policy: Policy): number {
+  return Math.max(CHROME_MIN_ALARM_MINUTES, policy.inactivity.seconds / 2 / 60);
 }
 
 export interface SessionStore {
@@ -42,6 +62,12 @@ export interface OrchestratorDeps {
     showSetup(tabId: number): Promise<void>;
     close(tabId: number): Promise<void>;
     focus(tabId: number): Promise<void>;
+    windowOf(tabId: number): Promise<number | undefined>;
+  };
+  /** Browser monitoring in the exam tab (content script) plus the fallback tick alarm. */
+  monitor: {
+    start(examTabId: number, pingMs: number, tickMinutes: number): Promise<void>;
+    stop(examTabId: number): Promise<void>;
   };
   /** Offscreen document that owns the camera/microphone stream. */
   capture: { start(): Promise<void>; stop(): Promise<void> };
@@ -140,10 +166,23 @@ export class Orchestrator {
       const request = parsed.data;
       const stored = await this.deps.store.get();
 
-      if (request.type === 'indicator:get') {
+      if (request.type === 'content:get' || request.type === 'rules:event') {
         if (sender.kind !== 'content_script') return internalFail('not_allowed');
-        const on = stored?.session.mediaOn === true && stored.session.examTabId === sender.tabId;
-        return { ok: true, on };
+        const ours = stored?.session.examTabId === sender.tabId ? stored : undefined;
+        const monitoring = ours?.session.status === 'active';
+        if (request.type === 'content:get') {
+          return {
+            ok: true,
+            on: ours?.session.mediaOn === true,
+            ...(monitoring
+              ? { monitorPingMs: ours.session.policy.inactivity.pingSeconds * 1000 }
+              : {}),
+          };
+        }
+        if (!ours) return internalFail('not_allowed');
+        if (!monitoring) return internalFail('wrong_state');
+        await this.applyRuleEvent(ours, request.event);
+        return { ok: true };
       }
       // Everything else is privileged: only the extension's own pages may send it.
       if (sender.kind !== 'extension_page') return internalFail('not_allowed');
@@ -188,6 +227,58 @@ export class Orchestrator {
         if (stored.session.status === 'awaiting_consent') await this.decline(rest, NOTICE_VERSION);
         else await this.end(rest);
       }
+    });
+  }
+
+  /** chrome.tabs.onActivated: another tab in the exam window hides the exam tab. */
+  handleTabActivated(tabId: number, windowId: number): Promise<void> {
+    return this.run(async () => {
+      const stored = await this.monitored();
+      if (!stored || windowId !== stored.examWindowId) return;
+      await this.applyRuleEvent(stored, {
+        kind: 'visibilitychange',
+        ts: this.deps.now(),
+        hidden: tabId !== stored.session.examTabId,
+      });
+    });
+  }
+
+  /** chrome.windows.onFocusChanged: any window other than the exam's (or none) is a blur. */
+  handleWindowFocus(windowId: number): Promise<void> {
+    return this.run(async () => {
+      const stored = await this.monitored();
+      if (!stored || stored.examWindowId === undefined) return;
+      await this.applyRuleEvent(stored, {
+        kind: windowId === stored.examWindowId ? 'focus' : 'blur',
+        ts: this.deps.now(),
+      });
+    });
+  }
+
+  /** chrome.alarms fallback tick for the inactivity timer. */
+  handleRulesTick(): Promise<void> {
+    return this.run(async () => {
+      const stored = await this.monitored();
+      if (stored) await this.applyRuleEvent(stored, { kind: 'tick', ts: this.deps.now() });
+    });
+  }
+
+  private async monitored(): Promise<StoredSession | undefined> {
+    const stored = await this.deps.store.get();
+    return stored?.session.status === 'active' ? stored : undefined;
+  }
+
+  private async applyRuleEvent(stored: StoredSession, event: RawBrowserEvent): Promise<void> {
+    const { session } = stored;
+    const { state, anomalies } = stepRuleEngine(
+      stored.rules ?? createRuleEngineState(session.activeAt ?? this.deps.now()),
+      event,
+      session.policy,
+    );
+    await this.deps.store.set({
+      ...stored,
+      rules: state,
+      anomalies: [...(stored.anomalies ?? []), ...anomalies],
     });
   }
 
@@ -247,13 +338,27 @@ export class Orchestrator {
 
   private async completeSetup(stored: StoredSession): Promise<InternalResponse> {
     if (stored.session.status !== 'setup') return internalFail('wrong_state');
-    const next = await this.save(stored, { type: 'setup_completed', ts: this.deps.now() });
-    if (next.uiTabId !== undefined) {
-      const { uiTabId, ...rest } = next;
-      await this.deps.store.set(rest);
-      await this.deps.tabs.close(uiTabId);
-    }
-    await this.deps.tabs.focus(next.session.examTabId);
+    const activated = transition(stored.session, {
+      type: 'setup_completed',
+      ts: this.deps.now(),
+    });
+    const { uiTabId, ...rest } = stored;
+    const { examTabId, policy } = activated;
+    const examWindowId = await this.deps.tabs.windowOf(examTabId);
+    await this.deps.store.set({
+      ...rest,
+      session: activated,
+      rules: createRuleEngineState(activated.activeAt ?? this.deps.now()),
+      anomalies: [],
+      ...(examWindowId === undefined ? {} : { examWindowId }),
+    });
+    if (uiTabId !== undefined) await this.deps.tabs.close(uiTabId);
+    await this.deps.tabs.focus(examTabId);
+    await this.deps.monitor.start(
+      examTabId,
+      policy.inactivity.pingSeconds * 1000,
+      rulesTickMinutes(policy),
+    );
     try {
       await this.deps.capture.start();
     } catch (error) {
@@ -286,6 +391,7 @@ export class Orchestrator {
   private async end(stored: StoredSession): Promise<void> {
     const { session } = stored;
     await this.deps.capture.stop();
+    if (session.status === 'active') await this.deps.monitor.stop(session.examTabId);
     const next = await this.save(stored, { type: 'end', ts: this.deps.now() });
     await this.deps.indicator.show(false, session.examTabId);
     if (next.uiTabId !== undefined) await this.deps.tabs.close(next.uiTabId);

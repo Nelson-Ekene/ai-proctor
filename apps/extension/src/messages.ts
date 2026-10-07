@@ -1,4 +1,4 @@
-import type { Policy, SdkEventMessage } from '@proctor/core';
+import { RawBrowserEventSchema, type Policy, type SdkEventMessage } from '@proctor/core';
 import { z } from 'zod';
 
 // Messages inside the extension (pages, offscreen document, content script <-> service worker).
@@ -31,7 +31,10 @@ export const InternalRequestSchema = z.discriminatedUnion('type', [
   // offscreen document
   z.strictObject({ type: z.literal('media:state'), on: z.boolean() }),
   // content script
-  z.strictObject({ type: z.literal('indicator:get') }),
+  z.strictObject({ type: z.literal('content:get') }),
+  // Raw browser event for the rule engine. The event schema strips any field other than
+  // kind/ts (and hidden/isFullscreen), so URLs, text or keys can never reach the log.
+  z.strictObject({ type: z.literal('rules:event'), event: RawBrowserEventSchema }),
 ]);
 export type InternalRequest = z.infer<typeof InternalRequestSchema>;
 
@@ -39,8 +42,19 @@ export type InternalError =
   'invalid_request' | 'not_allowed' | 'wrong_state' | 'api_error' | 'capture_failed';
 
 export type InternalResponse =
-  { ok: true; policy?: Policy; on?: boolean } | { ok: false; error: InternalError };
+  | {
+      ok: true;
+      policy?: Policy;
+      /** content:get: recording indicator on for this tab. */
+      on?: boolean;
+      /** content:get: browser monitoring active for this tab, with its ping interval. */
+      monitorPingMs?: number;
+    }
+  | { ok: false; error: InternalError };
 
 /** Service worker -> content script. */
 export type ContentMessage =
-  { type: 'indicator'; on: boolean } | { type: 'sdk-event'; message: SdkEventMessage };
+  | { type: 'indicator'; on: boolean }
+  | { type: 'sdk-event'; message: SdkEventMessage }
+  /** Start (pingMs) or stop (null) browser monitoring. */
+  | { type: 'monitor'; pingMs: number | null };

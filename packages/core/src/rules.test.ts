@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { DEFAULT_POLICY } from './policy';
 import {
   BrowserLogEntrySchema,
@@ -97,10 +97,10 @@ describe('browser rule engine: the five browser violation types', () => {
     expect(state.log.map((e) => e.type)).toEqual(['copy', 'cut', 'paste']);
   });
 
-  it('refresh_attempt for beforeunload and refresh keys', () => {
+  it('refresh_attempt for completed reloads and refresh keys', () => {
     const { anomalies, state } = run([
       { kind: 'refresh_key', ts: 1 * S },
-      { kind: 'beforeunload', ts: 2 * S },
+      { kind: 'page_reload', ts: 2 * S },
     ]);
     expect(types(anomalies)).toEqual(['refresh_attempt', 'refresh_attempt']);
     expect(state.log.map((e) => e.type)).toEqual(['refresh_attempt', 'refresh_attempt']);
@@ -147,7 +147,7 @@ describe('browser rule engine: the five browser violation types', () => {
   });
 
   it('uses the policy inactivity threshold', () => {
-    const policy = { ...DEFAULT_POLICY, inactivity: { seconds: 5 } };
+    const policy = { ...DEFAULT_POLICY, inactivity: { seconds: 5, pingSeconds: 1 } };
     const step = stepRuleEngine(createRuleEngineState(0), { kind: 'tick', ts: 5 * S }, policy);
     expect(types(step.anomalies)).toEqual(['inactivity']);
   });
@@ -219,7 +219,7 @@ describe('browser rule engine: privacy (type + timestamp only)', () => {
   });
 
   it('log entries contain only type and ts even if raw events carry extra data', () => {
-    const kinds = ['copy', 'cut', 'paste', 'refresh_key', 'beforeunload', 'blur', 'focus'] as const;
+    const kinds = ['copy', 'cut', 'paste', 'refresh_key', 'page_reload', 'blur', 'focus'] as const;
     const events = [
       ...kinds.map((kind, i) => ({ kind, ts: i * S, ...leaky })),
       { kind: 'fullscreenchange', ts: 8 * S, isFullscreen: true, ...leaky },

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from './api-client';
 import {
   Orchestrator,
+  rulesTickMinutes,
   type ExternalSender,
   type InternalSender,
   type OrchestratorDeps,
@@ -13,6 +14,7 @@ const EXAM = 'http://localhost:4400';
 const API = 'http://localhost:4401';
 const EXAM_TAB = 10;
 const UI_TAB = 20;
+const EXAM_WINDOW = 1;
 const fromExam: ExternalSender = { url: `${EXAM}/exam`, tabId: EXAM_TAB };
 const page: InternalSender = { kind: 'extension_page', tabId: UI_TAB };
 const content: InternalSender = { kind: 'content_script', tabId: EXAM_TAB };
@@ -60,6 +62,17 @@ function setup() {
         calls.push(`focus:${String(tab)}`);
         return Promise.resolve();
       }),
+      windowOf: vi.fn((): Promise<number | undefined> => Promise.resolve(EXAM_WINDOW)),
+    },
+    monitor: {
+      start: vi.fn((tab: number, pingMs: number, tickMinutes: number) => {
+        calls.push(`monitor.start:${String(tab)}:${String(pingMs)}:${String(tickMinutes)}`);
+        return Promise.resolve();
+      }),
+      stop: vi.fn((tab: number) => {
+        calls.push(`monitor.stop:${String(tab)}`);
+        return Promise.resolve();
+      }),
     },
     capture: {
       start: vi.fn(() => {
@@ -83,7 +96,15 @@ function setup() {
     }),
     now: () => (clock += 1000),
   } satisfies OrchestratorDeps;
-  return { orch: new Orchestrator(deps), deps, calls, consents, stored: () => stored };
+  return {
+    orch: new Orchestrator(deps),
+    deps,
+    calls,
+    consents,
+    stored: () => stored,
+    /** Moves the clock forward (each now() call also adds 1 s). */
+    advance: (ms: number) => (clock += ms),
+  };
 }
 
 type Harness = ReturnType<typeof setup>;
@@ -331,6 +352,7 @@ describe('setup and capture', () => {
       `showSetup:${String(UI_TAB)}`,
       `close:${String(UI_TAB)}`,
       `focus:${String(EXAM_TAB)}`,
+      `monitor.start:${String(EXAM_TAB)}:5000:0.5`,
       'capture.start',
       `indicator:true:${String(EXAM_TAB)}`,
       `page:${String(EXAM_TAB)}:ready`,
@@ -382,23 +404,24 @@ describe('setup and capture', () => {
     expect(h.calls.filter((c) => c.endsWith(':ready'))).toHaveLength(1);
   });
 
-  it('answers the content script indicator query for the exam tab only', async () => {
-    expect(await h.orch.handleInternal({ type: 'indicator:get' }, content)).toEqual({
+  it('answers the content script state query for the exam tab only', async () => {
+    expect(await h.orch.handleInternal({ type: 'content:get' }, content)).toEqual({
       ok: true,
       on: false,
     });
     await toActive(h);
-    expect(await h.orch.handleInternal({ type: 'indicator:get' }, content)).toEqual({
+    expect(await h.orch.handleInternal({ type: 'content:get' }, content)).toEqual({
       ok: true,
       on: true,
+      monitorPingMs: 5000,
     });
     expect(
-      await h.orch.handleInternal({ type: 'indicator:get' }, { kind: 'content_script', tabId: 99 }),
+      await h.orch.handleInternal({ type: 'content:get' }, { kind: 'content_script', tabId: 99 }),
     ).toEqual({
       ok: true,
       on: false,
     });
-    expect(await h.orch.handleInternal({ type: 'indicator:get' }, page)).toEqual({
+    expect(await h.orch.handleInternal({ type: 'content:get' }, page)).toEqual({
       ok: false,
       error: 'not_allowed',
     });
@@ -442,6 +465,7 @@ describe('ending', () => {
     });
     expect(h.calls).toEqual([
       'capture.stop',
+      `monitor.stop:${String(EXAM_TAB)}`,
       `indicator:false:${String(EXAM_TAB)}`,
       `page:${String(EXAM_TAB)}:ended`,
     ]);
@@ -518,5 +542,180 @@ describe('service worker restarts', () => {
     expect(await h.orch.handleExternal({ type: 'proctor:status' }, fromExam)).toMatchObject({
       ok: true,
     });
+  });
+});
+
+describe('browser rule engine (phase 3)', () => {
+  let h: Harness;
+  beforeEach(async () => {
+    h = setup();
+    await toActive(h);
+  });
+
+  /** Sends a raw event from the exam tab's content script, stamped "now". */
+  const rule = (event: Record<string, unknown>, sender: InternalSender = content) =>
+    h.orch.handleInternal({ type: 'rules:event', event: { ts: h.advance(100), ...event } }, sender);
+  const anomalyTypes = () => h.stored()?.anomalies?.map((a) => a.type) ?? [];
+
+  it('initialises the engine and the exam window when the session becomes active', () => {
+    expect(h.stored()).toMatchObject({ examWindowId: EXAM_WINDOW, anomalies: [] });
+    expect(h.stored()?.rules?.log).toEqual([]);
+  });
+
+  it('detects all five browser violation types from page events and the clock', async () => {
+    await rule({ kind: 'fullscreenchange', isFullscreen: true });
+    await rule({ kind: 'fullscreenchange', isFullscreen: false });
+    await rule({ kind: 'visibilitychange', hidden: true });
+    await rule({ kind: 'visibilitychange', hidden: false });
+    await rule({ kind: 'copy' });
+    await rule({ kind: 'paste' });
+    await rule({ kind: 'refresh_key' });
+    await rule({ kind: 'page_reload' });
+    h.advance(61_000);
+    await rule({ kind: 'tick' });
+    expect(new Set(anomalyTypes())).toEqual(
+      new Set([
+        'fullscreen_exit',
+        'tab_switch_or_blur',
+        'copy_paste',
+        'refresh_attempt',
+        'inactivity',
+      ]),
+    );
+    expect(h.stored()?.anomalies?.every((a) => a.confidence === 1)).toBe(true);
+  });
+
+  it('keeps a rolling log of type + timestamp covering the last 60 s', async () => {
+    await rule({ kind: 'copy' });
+    h.advance(30_000);
+    await rule({ kind: 'paste' });
+    let log = h.stored()?.rules?.log ?? [];
+    expect(log.map((e) => e.type)).toEqual(['copy', 'paste']);
+    h.advance(31_000);
+    await rule({ kind: 'cut' });
+    log = h.stored()?.rules?.log ?? [];
+    // 'copy' aged out; the idle gap also produced an inactivity entry.
+    expect(log.map((e) => e.type)).toEqual(['paste', 'inactivity', 'cut']);
+    const now = h.stored()?.rules?.now ?? 0;
+    expect(log.every((e) => now - e.ts <= 60_000)).toBe(true);
+  });
+
+  it('stores no URLs, page text or keystrokes even if a sender tries to include them', async () => {
+    const leaky = {
+      url: 'https://exam.example/q/42?token=abc',
+      text: 'SECRET-ANSWER',
+      key: 'TYPED-KEY-MARKER',
+      code: 'KeyV',
+      clipboardData: 'SECRET-PASTE',
+      title: 'Question 42',
+    };
+    for (const kind of ['copy', 'paste', 'refresh_key', 'blur', 'activity']) {
+      expect(await rule({ kind, ...leaky })).toEqual({ ok: true });
+    }
+    const stored = h.stored();
+    for (const entry of stored?.rules?.log ?? [])
+      expect(Object.keys(entry).sort()).toEqual(['ts', 'type']);
+    const json = JSON.stringify({ rules: stored?.rules, anomalies: stored?.anomalies });
+    for (const value of Object.values(leaky)) expect(json).not.toContain(value);
+  });
+
+  it('accepts rule events only from the exam tab while the session is active', async () => {
+    expect(await rule({ kind: 'copy' }, { kind: 'content_script', tabId: 99 })).toEqual({
+      ok: false,
+      error: 'not_allowed',
+    });
+    expect(await rule({ kind: 'copy' }, page)).toEqual({ ok: false, error: 'not_allowed' });
+    expect(await rule({ kind: 'keylogger' })).toEqual({ ok: false, error: 'invalid_request' });
+    expect(anomalyTypes()).toEqual([]);
+
+    const fresh = setup();
+    await fresh.orch.handleExternal(START, fromExam);
+    expect(
+      await fresh.orch.handleInternal(
+        { type: 'rules:event', event: { kind: 'copy', ts: 1 } },
+        content,
+      ),
+    ).toEqual({ ok: false, error: 'wrong_state' });
+  });
+
+  it('turns chrome.tabs activation in the exam window into tab-switch signals', async () => {
+    await h.orch.handleTabActivated(99, EXAM_WINDOW);
+    // The content script reports the same departure: still one anomaly.
+    await rule({ kind: 'visibilitychange', hidden: true });
+    await h.orch.handleTabActivated(EXAM_TAB, EXAM_WINDOW);
+    await rule({ kind: 'visibilitychange', hidden: false });
+    await h.orch.handleTabActivated(55, 2); // another window: exam tab unaffected
+    expect(anomalyTypes()).toEqual(['tab_switch_or_blur']);
+    expect(h.stored()?.rules?.log.map((e) => e.type)).toEqual([
+      'visibility_hidden',
+      'visibility_visible',
+    ]);
+  });
+
+  it('turns chrome.windows focus changes into blur/focus signals', async () => {
+    await h.orch.handleWindowFocus(-1); // browser lost focus (WINDOW_ID_NONE)
+    await h.orch.handleWindowFocus(EXAM_WINDOW);
+    await h.orch.handleWindowFocus(2); // another browser window
+    expect(anomalyTypes()).toEqual(['tab_switch_or_blur', 'tab_switch_or_blur']);
+  });
+
+  it('uses the alarm tick as the inactivity fallback', async () => {
+    h.advance(61_000);
+    await h.orch.handleRulesTick();
+    expect(anomalyTypes()).toEqual(['inactivity']);
+  });
+
+  it('does nothing before the session is active or after it ends', async () => {
+    const early = setup();
+    await early.orch.handleExternal(START, fromExam);
+    await early.orch.handleWindowFocus(-1);
+    await early.orch.handleTabActivated(99, EXAM_WINDOW);
+    await early.orch.handleRulesTick();
+    expect(early.stored()?.anomalies).toBeUndefined();
+
+    await h.orch.handleExternal({ type: 'proctor:end' }, fromExam);
+    expect(h.calls).toContain(`monitor.stop:${String(EXAM_TAB)}`);
+    expect(await rule({ kind: 'copy' })).toEqual({ ok: false, error: 'wrong_state' });
+    await h.orch.handleWindowFocus(-1);
+    expect(anomalyTypes()).toEqual([]);
+  });
+
+  it('ignores window focus when the exam window is unknown', async () => {
+    const x = setup();
+    x.deps.tabs.windowOf.mockResolvedValueOnce(undefined);
+    await toActive(x);
+    expect(x.stored()?.examWindowId).toBeUndefined();
+    await x.orch.handleWindowFocus(-1);
+    expect(x.stored()?.anomalies).toEqual([]);
+  });
+
+  it('survives a service worker restart mid-session', async () => {
+    await rule({ kind: 'fullscreenchange', isFullscreen: true });
+    const revived = new Orchestrator((h.orch as unknown as { deps: OrchestratorDeps }).deps);
+    await revived.handleInternal(
+      {
+        type: 'rules:event',
+        event: { kind: 'fullscreenchange', ts: h.advance(100), isFullscreen: false },
+      },
+      content,
+    );
+    expect(anomalyTypes()).toEqual(['fullscreen_exit']);
+  });
+
+  it('creates engine state lazily if it is missing', async () => {
+    const stored = h.stored();
+    if (!stored) throw new Error('no session');
+    const { rules: _rules, anomalies: _anomalies, ...rest } = stored;
+    await h.deps.store.set(rest);
+    await rule({ kind: 'copy' });
+    expect(anomalyTypes()).toEqual(['copy_paste']);
+  });
+});
+
+describe('rulesTickMinutes', () => {
+  it('never goes below the Chrome alarm minimum and follows the inactivity threshold', () => {
+    const policy = parsePolicy(DEFAULT_POLICY);
+    expect(rulesTickMinutes(policy)).toBe(0.5);
+    expect(rulesTickMinutes({ ...policy, inactivity: { seconds: 600, pingSeconds: 5 } })).toBe(5);
   });
 });

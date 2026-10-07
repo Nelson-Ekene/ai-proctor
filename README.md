@@ -65,6 +65,22 @@ Chrome, and open <http://localhost:4400>.
 `ON` + in-page indicator → SDK `ready`. Declining or closing the notice records `declined` and
 starts nothing. Ending, or closing the exam tab, closes the offscreen document.
 
+### Browser rule engine (Phase 3)
+
+The rule engine from `packages/core` runs in the service worker; its state and rolling log
+(type + timestamp only, `capture.logRetentionSeconds`, 60 s default) are kept in
+`chrome.storage.session`, so they survive worker restarts and page refreshes. Inputs:
+
+- **Content script** (`src/content/monitor.ts`): fullscreen, visibility, blur/focus (ignoring
+  focus moving into an iframe), copy/cut/paste, refresh shortcuts, completed reloads (Navigation
+  Timing), throttled activity pings and ticks every `inactivity.pingSeconds`. It sends only
+  `{kind, ts}`; key values, clipboard data, URLs and page text are never read or sent.
+- **Service worker**: `chrome.tabs.onActivated`, `chrome.windows.onFocusChanged`, and a
+  `chrome.alarms` tick as the inactivity fallback for throttled background tabs.
+
+Anomalies are kept on the session for Phase 6 to package and upload. To try it by hand, open
+<http://localhost:4400/?token=tok-fastidle> (3 s inactivity) and follow the steps on the page.
+
 ## Release checklist
 
 - [ ] **Fix the production extension ID**: use the Chrome Web Store ID, or pin a self-generated

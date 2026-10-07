@@ -51,7 +51,15 @@ export const PolicySchema = z.strictObject({
     windowSeconds: positive,
     countMultipliesPoints: z.boolean(),
   }),
-  inactivity: z.strictObject({ seconds: positive }),
+  inactivity: z
+    .strictObject({
+      seconds: positive,
+      /** How often the page reports activity/ticks to the rule engine. */
+      pingSeconds: positive,
+    })
+    .refine((i) => i.pingSeconds < i.seconds, {
+      message: 'inactivity.pingSeconds must be shorter than inactivity.seconds',
+    }),
   gazeAway: z.strictObject({ sustainedSeconds: positive }),
   retentionDays: z.number().int().positive(),
   /** Pre-test setup check (a readiness check for the candidate, never an exam result). */
@@ -111,7 +119,7 @@ export const DEFAULT_POLICY: Policy = deepFreeze({
     windowSeconds: 60, // ASSUMPTION: PRD says "short span"
     countMultipliesPoints: false, // OPEN QUESTION: see README
   },
-  inactivity: { seconds: 60 }, // ASSUMPTION: not specified in PRD
+  inactivity: { seconds: 60, pingSeconds: 5 }, // ASSUMPTION: not specified in PRD
   gazeAway: { sustainedSeconds: 5 }, // ASSUMPTION: not specified in PRD
   retentionDays: 30, // ASSUMPTION: open question in PRD
   setupCheck: {

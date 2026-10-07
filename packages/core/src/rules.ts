@@ -1,4 +1,4 @@
-import { z } from 'zod';
+﻿import { z } from 'zod';
 import type { Policy } from './policy';
 import type { DetectedAnomaly } from './schemas';
 
@@ -19,7 +19,7 @@ export const RawBrowserEventSchema = z.discriminatedUnion('kind', [
       'copy',
       'cut',
       'paste',
-      'beforeunload',
+      'page_reload',
       'refresh_key',
       'activity',
       'tick',
@@ -141,7 +141,7 @@ export function stepRuleEngine(
       log(event.kind, now);
       raise('copy_paste', now);
       break;
-    case 'beforeunload':
+    case 'page_reload':
     case 'refresh_key':
       log('refresh_attempt', now);
       raise('refresh_attempt', now);

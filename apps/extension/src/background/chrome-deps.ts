@@ -5,6 +5,7 @@ import { createApiClient } from './api-client';
 import type { OrchestratorDeps, StoredSession } from './orchestrator';
 
 const STORE_KEY = 'proctor.session';
+export const RULES_TICK_ALARM = 'proctor-rules-tick';
 const OFFSCREEN_PATH = 'src/offscreen/offscreen.html';
 
 const log = (message: string, error?: unknown) => {
@@ -67,6 +68,24 @@ export function createChromeDeps(config: ExtensionConfig): OrchestratorDeps {
         } catch (error) {
           log('could not focus exam tab', error);
         }
+      },
+      async windowOf(tabId) {
+        try {
+          return (await chrome.tabs.get(tabId)).windowId;
+        } catch {
+          return undefined;
+        }
+      },
+    },
+
+    monitor: {
+      async start(examTabId, pingMs, tickMinutes) {
+        await chrome.alarms.create(RULES_TICK_ALARM, { periodInMinutes: tickMinutes });
+        await sendToTab(examTabId, { type: 'monitor', pingMs });
+      },
+      async stop(examTabId) {
+        await chrome.alarms.clear(RULES_TICK_ALARM);
+        await sendToTab(examTabId, { type: 'monitor', pingMs: null });
       },
     },
 

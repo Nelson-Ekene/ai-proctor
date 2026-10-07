@@ -1,6 +1,6 @@
 // Mock exam host page (:4400) and mock proctoring API (:4401) for e2e tests and manual testing.
 // Run: pnpm --filter @proctor/e2e mock   (after building the SDK and the extension)
-import { ConsentRecordSchema, DEFAULT_POLICY, EndSessionSchema } from '@proctor/core';
+import { ConsentRecordSchema, DEFAULT_POLICY, EndSessionSchema, type Policy } from '@proctor/core';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, join } from 'node:path';
@@ -43,6 +43,13 @@ function sessionFor(req: IncomingMessage): string | undefined {
   return match ? `sess-${match[1] ?? ''}` : undefined;
 }
 
+/** "tok-fastidle" gets a 3 s inactivity threshold so tests (and humans) need not wait 60 s. */
+function policyFor(sessionId: string): Policy {
+  return sessionId === 'sess-fastidle'
+    ? { ...DEFAULT_POLICY, inactivity: { seconds: 3, pingSeconds: 0.5 } }
+    : DEFAULT_POLICY;
+}
+
 const HOST_PAGE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Mock exam</title></head>
 <body>
@@ -51,6 +58,31 @@ const HOST_PAGE = `<!doctype html>
   <button id="start">Start proctoring</button>
   <button id="end">End session</button>
   <ul id="events"></ul>
+
+  <section id="rule-tests">
+    <h2>Browser rule test page</h2>
+    <p>After the session is ready, trigger each browser violation type:</p>
+    <ol>
+      <li>Fullscreen exit: <button id="fs-enter">Enter fullscreen</button>
+        then <button id="fs-exit">Exit fullscreen</button> (or press Esc).</li>
+      <li>Tab switch / blur: switch to another tab or window, then come back.</li>
+      <li>Copy / paste: select text below and press Ctrl+C, then Ctrl+V into the box.</li>
+      <li>Refresh attempt: press F5 or Ctrl+R (the session continues after the reload).</li>
+      <li>Inactivity: stop using mouse and keyboard for the policy's inactivity time
+        (60 s by default; 3 s with <code>?token=tok-fastidle</code>).</li>
+    </ol>
+    <p id="question">Question 7: SECRET-ANSWER-42 is the text a reviewer must never see in logs.</p>
+    <textarea id="notes" rows="3" cols="60">SECRET-ANSWER-42</textarea>
+  </section>
+
+  <script type="module">
+    document.getElementById('fs-enter').addEventListener('click', () => {
+      void document.documentElement.requestFullscreen();
+    });
+    document.getElementById('fs-exit').addEventListener('click', () => {
+      if (document.fullscreenElement) void document.exitFullscreen();
+    });
+  </script>
   <script type="module">
     import { Proctor } from '/proctor-sdk.js';
     const params = new URLSearchParams(location.search);
@@ -121,7 +153,7 @@ async function handleApi(req: IncomingMessage, url: URL): Promise<Reply> {
 
   if (path === '/v1/sessions/current' && req.method === 'GET') {
     state.sessionFetches.push(sessionId);
-    return { status: 200, body: { sessionId, policySnapshot: DEFAULT_POLICY } };
+    return { status: 200, body: { sessionId, policySnapshot: policyFor(sessionId) } };
   }
   const match = /^\/v1\/sessions\/([^/]+)\/(consents|end)$/.exec(path);
   if (match && req.method === 'POST' && decodeURIComponent(match[1] ?? '') === sessionId) {

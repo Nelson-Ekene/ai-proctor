@@ -97,6 +97,21 @@ export function storedStatus(sw: Worker): Promise<string | undefined> {
   });
 }
 
+export interface RulesData {
+  log: { type: string; ts: number }[];
+  anomalies: { type: string; ts: number; confidence: number }[];
+}
+
+/** The browser rule engine's persisted rolling log and pending anomalies. */
+export function rulesData(sw: Worker): Promise<RulesData> {
+  return sw.evaluate(async () => {
+    const data = await chrome.storage.session.get('proctor.session');
+    const stored = data['proctor.session'] as
+      { rules?: { log: RulesData['log'] }; anomalies?: RulesData['anomalies'] } | undefined;
+    return { log: stored?.rules?.log ?? [], anomalies: stored?.anomalies ?? [] };
+  });
+}
+
 /** Makes the next `count` consent uploads fail with 503. */
 export async function failNextConsents(count: number): Promise<void> {
   await fetch(`${API_URL}/__test/fail-consents?count=${String(count)}`, { method: 'POST' });
