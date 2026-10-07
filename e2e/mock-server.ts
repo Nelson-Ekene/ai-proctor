@@ -118,6 +118,7 @@ interface Reply {
 
 async function handleHost(path: string): Promise<Reply> {
   if (path === '/') return { status: 200, body: HOST_PAGE, type: 'text/html; charset=utf-8' };
+  if (path === '/favicon.ico') return { status: 204 }; // keeps 404 noise out of diagnostics
   if (path === '/proctor-sdk.js') {
     try {
       return { status: 200, body: await readFile(SDK_BUNDLE, 'utf8'), type: 'text/javascript' };

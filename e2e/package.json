@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "mock": "tsx mock-server.ts",
-    "test": "playwright test"
+    "test": "playwright test",
+    "loop": "node scripts/loop.mjs"
   },
   "dependencies": {
     "@proctor/core": "workspace:*"

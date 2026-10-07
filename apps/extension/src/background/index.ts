@@ -7,9 +7,24 @@ import { classifySender } from './sender';
 const config = __PROCTOR_CONFIG__;
 const orchestrator = new Orchestrator(createChromeDeps(config));
 
+// Surface uncaught errors in the worker console (captured by the e2e diagnostics log).
+self.addEventListener('error', (event) => {
+  console.error('[proctor] uncaught error', event.message);
+});
+self.addEventListener('unhandledrejection', (event) => {
+  console.error('[proctor] unhandled rejection', event.reason);
+});
+
+/** Always answer: a rejected handler must not leave the sender waiting for a response. */
+function failed(error: unknown) {
+  console.error('[proctor] message handler failed', error);
+  return { ok: false, error: 'internal_error' } as const;
+}
+
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
   void orchestrator
     .handleExternal(message, { url: sender.url, tabId: sender.tab?.id })
+    .catch(failed)
     .then(sendResponse);
   return true; // async response
 });
@@ -17,6 +32,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   void orchestrator
     .handleInternal(message, classifySender(sender, chrome.runtime.id, config))
+    .catch(failed)
     .then(sendResponse);
   return true;
 });

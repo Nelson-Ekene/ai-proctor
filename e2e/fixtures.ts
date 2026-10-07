@@ -4,19 +4,26 @@ import {
   expect,
   type BrowserContext,
   type Page,
+  type Video,
   type Worker,
 } from '@playwright/test';
+import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  DEFAULT_POLICY,
+  mergeViolations,
+  type Anomaly,
+  type Policy,
+  type Violation,
+} from '@proctor/core';
 import type { MockState } from './mock-server.ts';
+import { ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS } from './settings.ts';
 
-const EXTENSION_PATH = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  'apps',
-  'extension',
-  'build',
-);
+/** Built extension under test. PW_EXTENSION_PATH lets the stability loop pin a snapshot. */
+const EXTENSION_PATH =
+  process.env.PW_EXTENSION_PATH ??
+  join(dirname(fileURLToPath(import.meta.url)), '..', 'apps', 'extension', 'build');
 export const HOST_URL = 'http://localhost:4400';
 export const API_URL = 'http://localhost:4401';
 
@@ -27,10 +34,37 @@ interface Fixtures {
   host: Page;
 }
 
+/** Timestamped diagnostics: service-worker console, worker lifecycle, page console, errors. */
+class DiagnosticsLog {
+  private readonly start = Date.now();
+  readonly lines: string[] = [];
+  add(source: string, text: string): void {
+    const t = ((Date.now() - this.start) / 1000).toFixed(3).padStart(8);
+    this.lines.push(`${t}s [${source}] ${text}`);
+  }
+  watchWorker(worker: Worker): void {
+    this.add('sw', `started ${worker.url()}`);
+    worker.on('console', (msg) => {
+      this.add(`sw:${msg.type()}`, msg.text());
+    });
+    worker.on('close', () => {
+      this.add('sw', 'terminated');
+    });
+  }
+}
+
+function shortUrl(url: string | undefined): string {
+  if (!url) return '?';
+  return url.replace(/^chrome-extension:\/\/[a-p]{32}/, 'ext:').replace(/\?.*$/, '');
+}
+
 export const test = base.extend<Fixtures>({
   // Fresh profile per test, real Chromium with the built extension and fake media devices.
+  // Playwright's trace/video/screenshot options only cover contexts it creates, so this
+  // persistent context applies the same policies (playwright.config.ts) by hand.
   // eslint-disable-next-line no-empty-pattern
-  context: async ({}, use) => {
+  context: async ({}, use, testInfo) => {
+    const log = new DiagnosticsLog();
     const context = await chromium.launchPersistentContext('', {
       channel: 'chromium',
       args: [
@@ -39,10 +73,69 @@ export const test = base.extend<Fixtures>({
         '--use-fake-device-for-media-stream',
         '--use-fake-ui-for-media-stream',
       ],
+      recordVideo: { dir: testInfo.outputPath('video') },
     });
+    context.setDefaultTimeout(ACTION_TIMEOUT_MS);
+    context.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
+
+    for (const worker of context.serviceWorkers()) log.watchWorker(worker);
+    context.on('serviceworker', (worker) => {
+      log.watchWorker(worker);
+    });
+    context.on('console', (msg) => {
+      log.add(`page:${msg.type()}`, `${shortUrl(msg.page()?.url())} ${msg.text()}`);
+    });
+    context.on('weberror', (err) => {
+      log.add(
+        'page:uncaught',
+        `${shortUrl(err.page()?.url())} ${err.error().stack ?? String(err.error())}`,
+      );
+    });
+    const videos: (Video | null)[] = [];
+    context.on('page', (page) => {
+      log.add('page', `opened ${shortUrl(page.url())}`);
+      videos.push(page.video());
+      page.on('framenavigated', (frame) => {
+        if (frame === page.mainFrame()) log.add('page', `navigated ${shortUrl(frame.url())}`);
+      });
+    });
+
+    // Tracing needs no code here: Playwright's `use.trace` (TRACE_MODE in settings.ts) also
+    // instruments persistent contexts launched inside a test.
     await fetch(`${API_URL}/__test/reset`, { method: 'POST' });
+
     await use(context);
+
+    const failed = testInfo.status !== testInfo.expectedStatus;
+    if (failed) {
+      for (const [i, page] of context.pages().entries()) {
+        try {
+          await testInfo.attach(`screenshot-${String(i)}-${shortUrl(page.url())}`, {
+            body: await page.screenshot({ fullPage: true }),
+            contentType: 'image/png',
+          });
+        } catch (error) {
+          log.add('fixture', `screenshot failed: ${String(error)}`);
+        }
+      }
+    }
     await context.close();
+
+    // Videos are finalised on close: keep them only for failures.
+    for (const [i, video] of videos.entries()) {
+      if (!video) continue;
+      if (failed)
+        await testInfo.attach(`video-${String(i)}`, {
+          path: await video.path(),
+          contentType: 'video/webm',
+        });
+    }
+    if (!failed) await rm(testInfo.outputPath('video'), { recursive: true, force: true });
+
+    await testInfo.attach('extension-diagnostics.log', {
+      body: log.lines.join('\n') || '(no output)',
+      contentType: 'text/plain',
+    });
   },
   serviceWorker: async ({ context }, use) => {
     const [existing] = context.serviceWorkers();
@@ -110,6 +203,35 @@ export function rulesData(sw: Worker): Promise<RulesData> {
       { rules?: { log: RulesData['log'] }; anomalies?: RulesData['anomalies'] } | undefined;
     return { log: stored?.rules?.log ?? [], anomalies: stored?.anomalies ?? [] };
   });
+}
+
+/**
+ * Turns the stored anomalies into violations with the real core merger, as the backend will.
+ * Detected anomalies carry no evidence yet (Phase 6), so a placeholder reference is added.
+ */
+export function mergedViolations(data: RulesData, policy: Policy = DEFAULT_POLICY): Violation[] {
+  const anomalies: Anomaly[] = data.anomalies.map((a, i) => ({
+    id: `a${String(i)}`,
+    type: a.type as Anomaly['type'],
+    ts: a.ts,
+    confidence: a.confidence,
+    evidence: [{ id: `e${String(i)}`, kind: 'event_sequence', ts: a.ts }],
+  }));
+  return mergeViolations(anomalies, policy);
+}
+
+/** Opens the host page, starts a session and completes consent + setup. */
+export async function startActiveSession(
+  context: BrowserContext,
+  extensionId: string,
+  token = 'tok-demo',
+): Promise<Page> {
+  const host = await context.newPage();
+  await host.goto(`${HOST_URL}/?ext=${extensionId}&token=${token}`);
+  await acceptAndCompleteSetup(await startSession(context, host));
+  await expect(host.locator('#events')).toContainText('ready');
+  await host.bringToFront();
+  return host;
 }
 
 /** Makes the next `count` consent uploads fail with 503. */

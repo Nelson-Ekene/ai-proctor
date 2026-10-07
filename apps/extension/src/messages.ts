@@ -39,7 +39,12 @@ export const InternalRequestSchema = z.discriminatedUnion('type', [
 export type InternalRequest = z.infer<typeof InternalRequestSchema>;
 
 export type InternalError =
-  'invalid_request' | 'not_allowed' | 'wrong_state' | 'api_error' | 'capture_failed';
+  | 'invalid_request'
+  | 'not_allowed'
+  | 'wrong_state'
+  | 'api_error'
+  | 'capture_failed'
+  | 'internal_error';
 
 export type InternalResponse =
   | {

@@ -286,5 +286,5 @@ False-positive marking to feed calibration; live monitoring; other browsers/mobi
 - The setup face check reports "needs attention" under Chrome's fake camera because the fake feed shows no face. Real face fixtures are part of Phase 4.
 - There is no extension popup (only the badge and its title). Not required by the PRD.
 - CI has not yet run on a real GitHub remote: the local repo has no remote configured, so the Actions workflow is unverified.
-- Phase 3: if the candidate drags the exam tab into another window, window-focus signals keep using the original window id until the next session (tab visibility from the content script still works).
+- Phase 3: if the candidate drags the exam tab into another window, window-focus signals keep using the original window id until the next session (tab visibility from the content script still works). Shown to reviewers as a documented limitation in the report footer (`REPORT_LIMITATIONS` in `packages/core/src/report-footer.ts`, rendered in Phase 8).
 - Phase 3: a refresh via keyboard shortcut produces two `refresh_attempt` anomalies (the key press and the completed reload); the merger collapses them into one violation.

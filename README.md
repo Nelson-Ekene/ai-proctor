@@ -65,6 +65,19 @@ Chrome, and open <http://localhost:4400>.
 `ON` + in-page indicator → SDK `ready`. Declining or closing the notice records `declined` and
 starts nothing. Ending, or closing the exam tab, closes the offscreen document.
 
+### e2e diagnostics
+
+- Each Playwright run writes to its own folder: `e2e/test-results/<run-id>` and
+  `e2e/playwright-report/<run-id>` (HTML + `results.json`). Failing runs are always kept; only
+  the five most recent passing runs are kept (pruned by `e2e/global-setup.ts`).
+- On failure: trace, screenshots of every open page, and video of every page. Locally traces
+  are `retain-on-failure` with no retries; in CI there is one retry, traced `on-first-retry`.
+- Every test attaches `extension-diagnostics.log`: service-worker console output and
+  start/termination, extension and exam page console output, navigations and uncaught errors.
+- Budgets: 60 s per test, 15 s per action, 20 s per navigation, 15 s per `expect`.
+- Stability loop: `pnpm --filter @proctor/e2e loop 20` runs the whole suite up to 20 times and
+  stops at the first failure (build the SDK and extension first).
+
 ### Browser rule engine (Phase 3)
 
 The rule engine from `packages/core` runs in the service worker; its state and rolling log

@@ -11,3 +11,4 @@ export * from './capture';
 export * from './session';
 export * from './protocol';
 export * from './protocol-schemas';
+export * from './report-footer';

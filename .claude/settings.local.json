@@ -8,7 +8,8 @@
       "PowerShell(pnpm test:e2e 2>&1)",
       "PowerShell(pnpm format 2>&1)",
       "PowerShell(pnpm lint 2>&1)",
-      "PowerShell(pnpm format 2>&1 | Out-Null; pnpm test 2>&1 | Select-String \"Test Files|Tests |FAIL|×|Statements|Branches|Functions|Lines|ERROR\"; \"---LINT\"; pnpm lint 2>&1 | Select-Object -Last 4; \"LINT=$LASTEXITCODE\"; \"---TYPES\"; pnpm typecheck 2>&1 | Select-Object -Last 2; \"TC=$LASTEXITCODE\")"
+      "PowerShell(pnpm format 2>&1 | Out-Null; pnpm test 2>&1 | Select-String \"Test Files|Tests |FAIL|×|Statements|Branches|Functions|Lines|ERROR\"; \"---LINT\"; pnpm lint 2>&1 | Select-Object -Last 4; \"LINT=$LASTEXITCODE\"; \"---TYPES\"; pnpm typecheck 2>&1 | Select-Object -Last 2; \"TC=$LASTEXITCODE\")",
+      "PowerShell(pnpm format 2>&1 | Out-Null; pnpm test 2>&1 | Select-String \"Test Files|Tests |FAIL|×|Statements|Branches|Functions|Lines|ERROR\"; pnpm lint 2>&1 | Select-Object -Last 2; \"LINT=$LASTEXITCODE\"; pnpm typecheck 2>&1 | Select-Object -Last 1; \"TC=$LASTEXITCODE\")"
     ]
   }
 }

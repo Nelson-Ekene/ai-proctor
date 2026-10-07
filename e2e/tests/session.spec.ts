@@ -106,7 +106,11 @@ test('closing the exam tab ends the session and turns media off', async ({
   await expect.poll(() => storedStatus(serviceWorker)).toBe('ended');
   await expect.poll(() => offscreenCount(serviceWorker)).toBe(0);
   await expect.poll(() => badgeText(serviceWorker)).toBe('');
-  expect((await mockState()).ends.map((e) => e.sessionId)).toEqual(['sess-demo']);
+  // The end record is uploaded after local teardown (badge, media), so wait for it to arrive
+  // instead of reading the mock once (that race failed run 2 of the stability loop).
+  await expect
+    .poll(async () => (await mockState()).ends.map((e) => e.sessionId))
+    .toEqual(['sess-demo']);
 });
 
 test('a page refresh does NOT end the session; capture and the indicator continue', async ({

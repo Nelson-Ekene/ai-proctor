@@ -40,7 +40,9 @@ export default tseslint.config(
   {
     // Node scripts.
     files: ['**/scripts/**/*.mjs'],
-    languageOptions: { globals: { console: 'readonly', fetch: 'readonly', Buffer: 'readonly' } },
+    languageOptions: {
+      globals: { console: 'readonly', fetch: 'readonly', Buffer: 'readonly', process: 'readonly' },
+    },
   },
   {
     // packages/core is pure: no DOM/Chrome/Node APIs (enforced by its tsconfig lib) and no

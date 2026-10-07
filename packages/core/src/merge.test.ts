@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ViolationType } from './catalogue';
 import { mergeViolations } from './merge';
 import { DEFAULT_POLICY, parsePolicy } from './policy';
+import { createRuleEngineState, stepRuleEngine } from './rules';
 import { ViolationSchema, type Anomaly } from './schemas';
 
 const S = 1000;
@@ -138,6 +139,29 @@ describe('mergeViolations', () => {
     expect(() => mergeViolations([anomaly('a', 'no_face', 0, 1.5)], DEFAULT_POLICY)).toThrow();
     const bad = { ...DEFAULT_POLICY, merge: { windowSeconds: 0, countMultipliesPoints: false } };
     expect(() => mergeViolations([], bad)).toThrow();
+  });
+
+  it('merges a keyboard refresh (key press + completed reload) into one violation, count 2', () => {
+    let state = createRuleEngineState(0);
+    const detected = [];
+    for (const event of [
+      { kind: 'refresh_key', ts: 1 * S },
+      { kind: 'page_reload', ts: 2 * S },
+    ] as const) {
+      const step = stepRuleEngine(state, event, DEFAULT_POLICY);
+      state = step.state;
+      detected.push(...step.anomalies);
+    }
+    const out = mergeViolations(
+      detected.map((d, i) => ({
+        ...d,
+        id: `r${String(i)}`,
+        evidence: [{ id: `e${String(i)}`, kind: 'event_sequence', ts: d.ts }],
+      })),
+      DEFAULT_POLICY,
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ type: 'refresh_attempt', count: 2 });
   });
 
   it('returns nothing for no anomalies', () => {
