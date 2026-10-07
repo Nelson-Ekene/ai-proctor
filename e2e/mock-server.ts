@@ -1,4 +1,5 @@
 // Mock exam host page (:4400) and mock proctoring API (:4401) for e2e tests and manual testing.
+// Ports can be overridden with MOCK_HOST_PORT / MOCK_API_PORT (see settings.ts).
 // Run: pnpm --filter @proctor/e2e mock   (after building the SDK and the extension)
 import { ConsentRecordSchema, DEFAULT_POLICY, EndSessionSchema, type Policy } from '@proctor/core';
 import { readFile } from 'node:fs/promises';
@@ -6,8 +7,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const HOST_PORT = 4400;
-export const API_PORT = 4401;
+import { API_PORT, HOST_PORT } from './settings.ts';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const SDK_BUNDLE = join(here, '..', 'packages', 'sdk', 'build', 'proctor-sdk.js');
 

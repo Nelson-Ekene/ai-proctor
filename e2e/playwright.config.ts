@@ -1,5 +1,5 @@
 import { defineConfig } from '@playwright/test';
-import { ACTION_TIMEOUT_MS, CI, NAVIGATION_TIMEOUT_MS, TRACE_MODE } from './settings.ts';
+import { ACTION_TIMEOUT_MS, API_URL, CI, NAVIGATION_TIMEOUT_MS, TRACE_MODE } from './settings.ts';
 
 // One id per `playwright test` invocation. Stored in the environment so worker processes (which
 // re-evaluate this file) resolve the same folders as the main process.
@@ -35,7 +35,7 @@ export default defineConfig({
   },
   webServer: {
     command: 'pnpm exec tsx mock-server.ts',
-    url: 'http://localhost:4401/__test/state',
+    url: `${API_URL}/__test/state`,
     reuseExistingServer: !CI,
     stdout: 'pipe',
   },

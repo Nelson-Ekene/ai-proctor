@@ -18,14 +18,13 @@ import {
   type Violation,
 } from '@proctor/core';
 import type { MockState } from './mock-server.ts';
-import { ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS } from './settings.ts';
+import { ACTION_TIMEOUT_MS, API_URL, HOST_URL, NAVIGATION_TIMEOUT_MS } from './settings.ts';
 
 /** Built extension under test. PW_EXTENSION_PATH lets the stability loop pin a snapshot. */
 const EXTENSION_PATH =
   process.env.PW_EXTENSION_PATH ??
   join(dirname(fileURLToPath(import.meta.url)), '..', 'apps', 'extension', 'build');
-export const HOST_URL = 'http://localhost:4400';
-export const API_URL = 'http://localhost:4401';
+export { API_URL, HOST_URL };
 
 interface Fixtures {
   context: BrowserContext;
