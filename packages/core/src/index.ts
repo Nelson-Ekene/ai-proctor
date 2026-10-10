@@ -14,3 +14,5 @@ export * from './protocol-schemas';
 export * from './report-footer';
 export * from './video';
 export * from './audio';
+export * from './upload';
+export * from './capture-package';

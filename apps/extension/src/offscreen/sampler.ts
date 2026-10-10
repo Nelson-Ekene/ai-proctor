@@ -81,6 +81,14 @@ export class VideoSampler<F extends CapturedFrame> {
     return this.queue;
   }
 
+  /**
+   * Captures a burst of capture.burstFrames frames now (FR6), for an anomaly raised elsewhere
+   * (browser or audio). Frames are stored as evidence without analysis.
+   */
+  captureBurst(): Promise<EvidenceRef[]> {
+    return this.stopped ? Promise.resolve([]) : this.burst();
+  }
+
   private later(ms: number, fn: () => void): void {
     const id = this.deps.setTimeout(
       () => {

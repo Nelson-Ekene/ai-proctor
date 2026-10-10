@@ -1,16 +1,93 @@
-import { PROCTOR_EVENT_SOURCE } from '@proctor/core';
+import { EvidenceRefSchema, PROCTOR_EVENT_SOURCE, PendingAnomalySchema } from '@proctor/core';
+import { z } from 'zod';
 import type { ExtensionConfig } from '../config';
 import type { ContentMessage } from '../messages';
+import {
+  deleteMedia,
+  deleteQueueItems,
+  getMedia,
+  listMedia,
+  listQueue,
+  openEvidenceDb,
+  putQueueItems,
+} from '../shared/evidence-store';
 import { createApiClient } from './api-client';
 import type { OrchestratorDeps, StoredSession } from './orchestrator';
+import { Uploader } from './uploader';
 
 const STORE_KEY = 'proctor.session';
 export const RULES_TICK_ALARM = 'proctor-rules-tick';
+export const UPLOAD_ALARM = 'proctor-upload';
 const OFFSCREEN_PATH = 'src/offscreen/offscreen.html';
+/** chrome.alarms minimum delay; shorter retries also use a timer while the worker is alive. */
+const ALARM_MIN_MS = 30_000;
+/** Bounded waits for the offscreen document (shutdown and burst must never hang the worker). */
+const OFFSCREEN_FLUSH_TIMEOUT_MS = 5_000;
+const OFFSCREEN_BURST_TIMEOUT_MS = 15_000;
+const OFFSCREEN_CLOSE_WAIT_MS = 3_000;
 
 const log = (message: string, error?: unknown) => {
   console.warn(`[proctor] ${message}`, error ?? '');
 };
+const trace = (message: string) => {
+  // Debug level: hidden by default in DevTools, captured by the e2e diagnostics log.
+  console.debug(`[proctor] ${message}`);
+};
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => {
+      setTimeout(() => {
+        resolve(fallback);
+      }, ms);
+    }),
+  ]);
+}
+
+const BurstReply = z.object({ ok: z.literal(true), evidence: z.array(EvidenceRefSchema) });
+const FlushReply = z.object({ ok: z.literal(true), anomalies: z.array(PendingAnomalySchema) });
+
+/** Persistent upload queue + uploader over the shared IndexedDB evidence store. */
+export function createUploader(): Uploader {
+  let db: Promise<IDBDatabase> | undefined;
+  const getDb = () => (db ??= openEvidenceDb());
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const uploader: Uploader = new Uploader({
+    queue: {
+      list: async () => listQueue(await getDb()),
+      put: async (items) => putQueueItems(await getDb(), items),
+      remove: async (ids) => deleteQueueItems(await getDb(), ids),
+    },
+    media: {
+      get: async (ref) => getMedia(await getDb(), ref),
+      remove: async (ref) => deleteMedia(await getDb(), ref),
+      list: async () => listMedia(await getDb()),
+    },
+    async activeSessionId() {
+      const data = await chrome.storage.session.get(STORE_KEY);
+      const stored = data[STORE_KEY] as StoredSession | undefined;
+      return stored && !['ended', 'consent_declined'].includes(stored.session.status)
+        ? stored.session.sessionId
+        : undefined;
+    },
+    fetch: (...args) => fetch(...args),
+    now: () => Date.now(),
+    rng: () => (crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) / 2 ** 32,
+    schedule(at) {
+      const delay = Math.max(0, at - Date.now());
+      // The alarm survives worker shutdown and browser restarts; the timer covers short delays.
+      void chrome.alarms.create(UPLOAD_ALARM, { when: Date.now() + Math.max(delay, ALARM_MIN_MS) });
+      if (delay < ALARM_MIN_MS) {
+        if (timer !== undefined) clearTimeout(timer);
+        timer = setTimeout(() => void uploader.drain(), delay);
+      }
+    },
+    log,
+    trace,
+  });
+  return uploader;
+}
 
 async function sendToTab(tabId: number, message: ContentMessage): Promise<void> {
   try {
@@ -29,15 +106,41 @@ async function offscreenExists(url: string): Promise<boolean> {
   return contexts.length > 0;
 }
 
-export function createChromeDeps(config: ExtensionConfig): OrchestratorDeps {
+export function createChromeDeps(config: ExtensionConfig, uploader: Uploader): OrchestratorDeps {
   return {
     config,
     api: createApiClient(),
     now: () => Date.now(),
+    newId: () => crypto.randomUUID(),
     log,
-    // Debug level: hidden by default in DevTools, captured by the e2e diagnostics log.
-    trace: (message) => {
-      console.debug(`[proctor] ${message}`);
+    trace,
+
+    uploads: {
+      enqueue: (items) => uploader.enqueue(items),
+      kick: () => void uploader.drain(),
+    },
+
+    offscreen: {
+      async burst() {
+        if (!(await offscreenExists(chrome.runtime.getURL(OFFSCREEN_PATH)))) return [];
+        const reply: unknown = await withTimeout<unknown>(
+          chrome.runtime.sendMessage({ type: 'offscreen:burst' }).catch(() => undefined),
+          OFFSCREEN_BURST_TIMEOUT_MS,
+          undefined,
+        );
+        const parsed = BurstReply.safeParse(reply);
+        return parsed.success ? parsed.data.evidence : [];
+      },
+      async flush() {
+        if (!(await offscreenExists(chrome.runtime.getURL(OFFSCREEN_PATH)))) return [];
+        const reply: unknown = await withTimeout<unknown>(
+          chrome.runtime.sendMessage({ type: 'offscreen:stop' }).catch(() => undefined),
+          OFFSCREEN_FLUSH_TIMEOUT_MS,
+          undefined,
+        );
+        const parsed = FlushReply.safeParse(reply);
+        return parsed.success ? parsed.data.anomalies : [];
+      },
     },
 
     store: {
@@ -105,10 +208,27 @@ export function createChromeDeps(config: ExtensionConfig): OrchestratorDeps {
         });
       },
       async stop() {
-        // Closing the document ends every media track it holds.
-        if (await offscreenExists(chrome.runtime.getURL(OFFSCREEN_PATH))) {
-          await chrome.offscreen.closeDocument();
-        }
+        // Closing the document ends every media track it holds. Chrome can take tens of seconds
+        // to close it on a loaded machine; the session must not wait for that (media tracks are
+        // already stopped by the offscreen document itself on "offscreen:stop"), so the wait is
+        // bounded and a slow close finishes in the background.
+        const started = Date.now();
+        if (!(await offscreenExists(chrome.runtime.getURL(OFFSCREEN_PATH)))) return;
+        trace(`capture.stop: contexts checked in ${String(Date.now() - started)}ms`);
+        const closing = chrome.offscreen
+          .closeDocument()
+          .then(() => {
+            trace(`capture.stop: document closed after ${String(Date.now() - started)}ms`);
+          })
+          .catch((error: unknown) => {
+            log('closing the offscreen document failed', error);
+          });
+        const finished = await withTimeout(
+          closing.then(() => true),
+          OFFSCREEN_CLOSE_WAIT_MS,
+          false,
+        );
+        if (!finished) log('offscreen document still closing; continuing without waiting');
       },
     },
 

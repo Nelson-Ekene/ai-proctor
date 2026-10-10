@@ -1,16 +1,22 @@
 import {
   ExternalRequestSchema,
   captureAllowed,
+  categoryOf,
   createRuleEngineState,
   isTerminal,
+  openAnomaly,
+  packageAnomaly,
+  priorityFor,
   stepRuleEngine,
   transition,
-  categoryOf,
   type ConsentRecord,
-  type PendingAnomaly,
+  type EvidenceRef,
   type ExternalErrorCode,
   type ExternalResponse,
+  type OpenAnomaly,
+  type PendingAnomaly,
   type Policy,
+  type QueueKind,
   type RawBrowserEvent,
   type RuleEngineState,
   type SdkEventName,
@@ -18,6 +24,7 @@ import {
   type SessionState,
 } from '@proctor/core';
 import { isAllowedOrigin, type ExtensionConfig } from '../config';
+import type { QueueItem, QueuedRequest } from '../shared/evidence-store';
 import {
   InternalRequestSchema,
   NOTICE_VERSION,
@@ -38,13 +45,23 @@ export interface StoredSession {
   examWindowId?: number;
   /** Browser rule engine state, including the rolling type+timestamp log (Phase 3). */
   rules?: RuleEngineState;
-  /** Anomalies detected but not yet packaged/uploaded (Phase 6 drains this). */
-  anomalies?: PendingAnomaly[];
+  /**
+   * Anomalies detected this session. Each waits for its capture window to close, is then
+   * packaged (event sequence + evidence) into the upload queue and marked `packaged`.
+   */
+  anomalies?: SessionAnomaly[];
   /** Webcam sampling state, e.g. reduced rate on a slow device (Phase 4). */
   videoMeta?: VideoMetaRecord;
   /** Microphone monitoring state (Phase 5). */
   audioMeta?: AudioMetaRecord;
 }
+
+export interface SessionAnomaly extends OpenAnomaly {
+  /** True once queued for upload (its "before" snapshot is then dropped). */
+  packaged?: boolean;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** chrome.alarms cannot fire more often than every 30 s. */
 export const CHROME_MIN_ALARM_MINUTES = 0.5;
@@ -82,6 +99,17 @@ export interface OrchestratorDeps {
   indicator: { show(on: boolean, examTabId: number): Promise<void> };
   /** Relays an SDK event to the exam tab's content script. Must not throw. */
   notifyPage(tabId: number, event: SdkEventName, sessionId: string): Promise<void>;
+  /** Persistent upload queue (Phase 6). `kick` starts a drain without waiting for it. */
+  uploads: { enqueue(items: QueueItem[]): Promise<boolean>; kick(): void };
+  /** Requests to the offscreen document. Both resolve empty if it is absent or unresponsive. */
+  offscreen: {
+    /** Captures capture.burstFrames extra frames now (for anomalies without frames). */
+    burst(): Promise<EvidenceRef[]>;
+    /** Stops analysis and returns anomalies of a clip that was still in progress. */
+    flush(): Promise<PendingAnomaly[]>;
+  };
+  /** Unique ids for anomalies and evidence (also their upload idempotency keys). */
+  newId(): string;
   now(): number;
   log?(message: string, error?: unknown): void;
   /** Debug-level tracing of queue tasks and teardown steps (diagnostics). */
@@ -280,10 +308,7 @@ export class Orchestrator {
           if (request.anomalies.some((a) => categoryOf(a.type) !== category)) {
             return internalFail('invalid_request');
           }
-          await this.deps.store.set({
-            ...stored,
-            anomalies: [...(stored.anomalies ?? []), ...request.anomalies],
-          });
+          await this.packageDue(await this.addAnomalies(stored, request.anomalies));
           return { ok: true };
         }
 
@@ -364,11 +389,148 @@ export class Orchestrator {
       event,
       session.policy,
     );
-    await this.deps.store.set({
-      ...stored,
-      rules: state,
-      anomalies: [...(stored.anomalies ?? []), ...anomalies],
+    // Every rule event (including the periodic ticks) also packages closed capture windows.
+    await this.packageDue(await this.addAnomalies({ ...stored, rules: state }, anomalies));
+  }
+
+  /**
+   * Records detected anomalies, each opening a capture window (FR6) with a snapshot of the
+   * preceding browser events. Anomalies without frames (browser, audio) ask the offscreen
+   * document for a burst of extra frames. Persists and returns the new state.
+   */
+  private async addAnomalies(
+    stored: StoredSession,
+    detected: readonly PendingAnomaly[],
+    options: { burst: boolean } = { burst: true },
+  ): Promise<StoredSession> {
+    if (detected.length === 0) {
+      await this.deps.store.set(stored);
+      return stored;
+    }
+    const { policy } = stored.session;
+    const log = stored.rules?.log ?? [];
+    const opened: SessionAnomaly[] = detected.map((d) =>
+      openAnomaly(d, this.deps.newId(), log, policy),
+    );
+    const next = { ...stored, anomalies: [...(stored.anomalies ?? []), ...opened] };
+    await this.deps.store.set(next);
+    const needFrames = opened.filter((a) => !(a.evidence ?? []).some((e) => e.kind === 'frame'));
+    if (options.burst && needFrames.length > 0) this.requestBurst(needFrames.map((a) => a.id));
+    return next;
+  }
+
+  /** Burst capture runs outside the queue (it takes seconds); frames are attached afterwards. */
+  private requestBurst(anomalyIds: readonly string[]): void {
+    this.background('burst', async () => {
+      const frames = await this.deps.offscreen.burst();
+      if (frames.length === 0) return;
+      await this.run('attachBurst', async () => {
+        const stored = await this.deps.store.get();
+        if (!stored?.anomalies) return;
+        const anomalies = stored.anomalies.map((a) =>
+          anomalyIds.includes(a.id) && !a.packaged
+            ? { ...a, evidence: [...(a.evidence ?? []), ...frames] }
+            : a,
+        );
+        await this.deps.store.set({ ...stored, anomalies });
+      });
     });
+  }
+
+  /**
+   * Packages every anomaly whose capture window has closed (or all, when `force` is set at
+   * session end) and hands the records + evidence to the upload queue. The queue is written
+   * before the anomalies are marked packaged, so a crash can only cause a harmless re-send
+   * (same idempotency keys), never a loss.
+   */
+  private async packageDue(stored: StoredSession, force = false): Promise<StoredSession> {
+    const now = this.deps.now();
+    const due = (stored.anomalies ?? []).filter((a) => !a.packaged && (force || a.closesAt <= now));
+    if (due.length === 0) return stored;
+    const { session } = stored;
+    const log = stored.rules?.log ?? [];
+    const clips = (stored.anomalies ?? []).flatMap((a) =>
+      (a.evidence ?? []).filter((e) => e.kind === 'audio'),
+    );
+    const items: QueueItem[] = [];
+    for (const open of due) {
+      const pkg = packageAnomaly(open, log, clips, this.deps.newId(), session.policy);
+      const severity = session.policy.severityByType[open.type];
+      const group = { group: open.id, priority: priorityFor('anomaly', severity) };
+      items.push(
+        this.queueItem(session, 'anomaly', open.id, group, {
+          method: 'POST',
+          path: `/v1/sessions/${encodeURIComponent(session.sessionId)}/anomalies`,
+          contentType: 'application/json',
+          body: JSON.stringify(pkg.anomaly),
+        }),
+      );
+      for (const ref of pkg.anomaly.evidence) {
+        const path = `/v1/sessions/${encodeURIComponent(session.sessionId)}/evidence/${encodeURIComponent(ref.id)}`;
+        const evidence = { ...group, dependsOn: open.id };
+        if (ref.kind === 'event_sequence') {
+          const body = JSON.stringify(pkg.eventSequence);
+          items.push(
+            this.queueItem(session, 'evidence', ref.id, evidence, {
+              method: 'PUT',
+              path,
+              contentType: 'application/json',
+              body,
+            }),
+          );
+        } else {
+          const store = ref.kind === 'frame' ? 'frames' : 'clips';
+          items.push(
+            this.queueItem(session, 'evidence', ref.id, evidence, {
+              method: 'PUT',
+              path,
+              contentType: ref.kind === 'frame' ? 'image/jpeg' : 'audio/wav',
+              media: { store, id: ref.id },
+            }),
+          );
+        }
+      }
+    }
+    await this.deps.uploads.enqueue(items);
+    const dueIds = new Set(due.map((a) => a.id));
+    const next = {
+      ...stored,
+      anomalies: (stored.anomalies ?? []).map((a) =>
+        dueIds.has(a.id) ? { ...a, packaged: true, before: [] } : a,
+      ),
+    };
+    await this.deps.store.set(next);
+    this.deps.uploads.kick();
+    this.deps.trace?.(
+      `packaged ${String(due.length)} anomalies into ${String(items.length)} uploads`,
+    );
+    return next;
+  }
+
+  private queueItem(
+    session: SessionState,
+    kind: QueueKind,
+    id: string,
+    extra: { priority?: number; group?: string; dependsOn?: string },
+    request: Omit<QueuedRequest, 'apiBase' | 'token'>,
+  ): QueueItem {
+    const now = this.deps.now();
+    return {
+      id,
+      sessionId: session.sessionId,
+      kind,
+      priority: extra.priority ?? priorityFor(kind),
+      ...(extra.group === undefined ? {} : { group: extra.group }),
+      ...(extra.dependsOn === undefined ? {} : { dependsOn: extra.dependsOn }),
+      bytes: request.body?.length ?? 0,
+      createdAt: now,
+      attempts: 0,
+      nextAttemptAt: now,
+      // Never keep anything on the device longer than the server would keep it.
+      expiresAt: now + session.policy.retentionDays * DAY_MS,
+      retry: session.policy.upload,
+      request: { apiBase: session.apiBase, token: session.sessionToken, ...request },
+    };
   }
 
   private async save(stored: StoredSession, event: SessionEvent): Promise<StoredSession> {
@@ -414,9 +576,27 @@ export class Orchestrator {
     if (next.uiTabId !== undefined) await this.deps.tabs.close(next.uiTabId);
     await this.deps.tabs.focus(session.examTabId);
     await this.deps.notifyPage(session.examTabId, 'consent_declined', session.sessionId);
-    this.background('decline upload', () =>
-      this.deps.api.postConsent(session.apiBase, session.sessionToken, session.sessionId, record),
-    );
+    // The decline record goes through the persistent queue so it eventually reaches the server
+    // even if it is unreachable now.
+    try {
+      await this.deps.uploads.enqueue([
+        this.queueItem(
+          session,
+          'consent',
+          this.deps.newId(),
+          {},
+          {
+            method: 'POST',
+            path: `/v1/sessions/${encodeURIComponent(session.sessionId)}/consents`,
+            contentType: 'application/json',
+            body: JSON.stringify(record),
+          },
+        ),
+      ]);
+      this.deps.uploads.kick();
+    } catch (error) {
+      this.deps.log?.('could not queue the decline record', error);
+    }
     return { ok: true } as const;
   }
 
@@ -483,19 +663,45 @@ export class Orchestrator {
     const step = (name: string, work: () => Promise<void>) => this.step(`end: ${name}`, work);
     // Persist "ended" first: from here on no media or rule event is accepted, even if a
     // teardown call below is slow.
-    const next = await this.save(stored, { type: 'end', ts: this.deps.now() });
+    let next = await this.save(stored, { type: 'end', ts: this.deps.now() });
+    const wasActive = session.status === 'active';
+    // Collect a speech clip still being recorded before the offscreen document closes.
+    const flushed = wasActive
+      ? await this.step('end: offscreen.flush', () => this.deps.offscreen.flush())
+      : [];
     // Media off before the indicator goes off: the indicator never under-reports.
     await step('capture.stop', () => this.deps.capture.stop());
-    if (session.status === 'active') {
+    if (wasActive) {
       await step('monitor.stop', () => this.deps.monitor.stop(session.examTabId));
     }
     await step('indicator.off', () => this.deps.indicator.show(false, session.examTabId));
     const { uiTabId } = next;
     if (uiTabId !== undefined) await step('ui.close', () => this.deps.tabs.close(uiTabId));
     await step('notify', () => this.deps.notifyPage(session.examTabId, 'ended', session.sessionId));
-    const ts = next.session.endedAt ?? this.deps.now();
-    this.background('end upload', () =>
-      this.deps.api.postEnd(session.apiBase, session.sessionToken, session.sessionId, { ts }),
-    );
+
+    // Flush: package every remaining anomaly now (windows are cut short at session end), then
+    // queue the end record last (lowest priority), and start uploading.
+    try {
+      next = await this.addAnomalies(next, flushed, { burst: false });
+      next = await this.packageDue(next, true);
+      const ts = next.session.endedAt ?? this.deps.now();
+      await this.deps.uploads.enqueue([
+        this.queueItem(
+          next.session,
+          'end',
+          this.deps.newId(),
+          {},
+          {
+            method: 'POST',
+            path: `/v1/sessions/${encodeURIComponent(session.sessionId)}/end`,
+            contentType: 'application/json',
+            body: JSON.stringify({ ts }),
+          },
+        ),
+      ]);
+      this.deps.uploads.kick();
+    } catch (error) {
+      this.deps.log?.('could not queue end-of-session uploads', error);
+    }
   }
 }

@@ -1,5 +1,14 @@
-import { DEFAULT_POLICY, parsePolicy, type ConsentRecord } from '@proctor/core';
+import {
+  AnomalySchema,
+  DEFAULT_POLICY,
+  parsePolicy,
+  priorityFor,
+  type ConsentRecord,
+  type EvidenceRef,
+  type PendingAnomaly,
+} from '@proctor/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { QueueItem } from '../shared/evidence-store';
 import type { ApiClient } from './api-client';
 import {
   Orchestrator,
@@ -35,6 +44,8 @@ function setup() {
     postEnd: vi.fn(() => Promise.resolve()),
   };
   let clock = 1000;
+  let ids = 0;
+  const queued: QueueItem[] = [];
   const deps = {
     config: { examOrigins: [EXAM], apiOrigins: [API] },
     store: {
@@ -94,6 +105,18 @@ function setup() {
       calls.push(`page:${String(tab)}:${event}`);
       return Promise.resolve();
     }),
+    uploads: {
+      enqueue: vi.fn((items: QueueItem[]) => {
+        queued.push(...structuredClone(items));
+        return Promise.resolve(true);
+      }),
+      kick: vi.fn(),
+    },
+    offscreen: {
+      burst: vi.fn((): Promise<EvidenceRef[]> => Promise.resolve([])),
+      flush: vi.fn((): Promise<PendingAnomaly[]> => Promise.resolve([])),
+    },
+    newId: () => `id${String(++ids)}`,
     now: () => (clock += 1000),
   } satisfies OrchestratorDeps;
   return {
@@ -101,6 +124,12 @@ function setup() {
     deps,
     calls,
     consents,
+    queued,
+    /** Decisions sent directly (accept) or queued (decline). */
+    queuedBodies: (kind: string) =>
+      queued
+        .filter((q) => q.kind === kind)
+        .map((q) => JSON.parse(q.request.body ?? 'null') as unknown),
     stored: () => stored,
     /** Moves the clock forward (each now() call also adds 1 s). */
     advance: (ms: number) => (clock += ms),
@@ -239,9 +268,17 @@ describe('consent', () => {
       page,
     );
     expect(res).toEqual({ ok: true });
-    expect(h.consents).toEqual([
+    // The decline record goes through the persistent upload queue, not a direct request.
+    expect(h.consents).toEqual([]);
+    expect(h.queuedBodies('consent')).toEqual([
       { decision: 'declined', noticeVersion: 'v1', ts: expect.any(Number) as number },
     ]);
+    expect(h.queued[0]).toMatchObject({
+      kind: 'consent',
+      priority: 100,
+      request: { method: 'POST', path: '/v1/sessions/s1/consents', apiBase: API, token: 'tok' },
+    });
+    expect(h.deps.uploads.kick).toHaveBeenCalled();
     expect(h.stored()?.session.status).toBe('consent_declined');
     expect(h.calls).toEqual([
       `close:${String(UI_TAB)}`,
@@ -252,8 +289,8 @@ describe('consent', () => {
     expect(h.deps.indicator.show).not.toHaveBeenCalled();
   });
 
-  it('declining succeeds locally even if the API is down', async () => {
-    vi.mocked(h.deps.api.postConsent).mockRejectedValueOnce(new Error('offline'));
+  it('declining succeeds locally even if the record cannot be queued', async () => {
+    h.deps.uploads.enqueue.mockRejectedValueOnce(new Error('storage full'));
     expect(
       await h.orch.handleInternal(
         { type: 'consent:decide', accepted: false, noticeVersion: 'v1' },
@@ -315,7 +352,7 @@ describe('consent', () => {
 
   it('closing the notice tab counts as declining', async () => {
     await h.orch.handleTabRemoved(UI_TAB);
-    expect(h.consents[0]?.decision).toBe('declined');
+    expect(h.queuedBodies('consent')).toMatchObject([{ decision: 'declined' }]);
     expect(h.stored()?.session.status).toBe('consent_declined');
     expect(h.calls).toContain(`page:${String(EXAM_TAB)}:consent_declined`);
     expect(h.calls).not.toContain(`close:${String(UI_TAB)}`); // already closed
@@ -469,14 +506,19 @@ describe('ending', () => {
       `indicator:false:${String(EXAM_TAB)}`,
       `page:${String(EXAM_TAB)}:ended`,
     ]);
-    expect(h.deps.api.postEnd).toHaveBeenCalledWith(API, 'tok', 's1', {
-      ts: expect.any(Number) as number,
+    // The end record is queued (lowest priority: sent after all evidence), not sent directly.
+    expect(h.deps.api.postEnd).not.toHaveBeenCalled();
+    expect(h.queuedBodies('end')).toEqual([{ ts: expect.any(Number) as number }]);
+    expect(h.queued.find((q) => q.kind === 'end')).toMatchObject({
+      priority: 1,
+      request: { method: 'POST', path: '/v1/sessions/s1/end' },
     });
+    expect(h.deps.offscreen.flush).toHaveBeenCalled();
     expect(h.stored()?.session).toMatchObject({ status: 'ended', mediaOn: false });
   });
 
-  it('end succeeds locally even if the API is down', async () => {
-    h.deps.api.postEnd = vi.fn(() => Promise.reject(new Error('offline')));
+  it('end succeeds locally even if queueing fails', async () => {
+    h.deps.uploads.enqueue.mockRejectedValue(new Error('storage full'));
     expect(await h.orch.handleExternal({ type: 'proctor:end' }, fromExam)).toMatchObject({
       ok: true,
     });
@@ -745,7 +787,7 @@ describe('video sampling messages (phase 4)', () => {
     expect(
       await h.orch.handleInternal({ type: 'video:anomalies', anomalies: [phone] }, offscreen),
     ).toEqual({ ok: true });
-    expect(h.stored()?.anomalies).toEqual([phone]);
+    expect(h.stored()?.anomalies).toMatchObject([phone]);
   });
 
   it('rejects non-video anomalies, other senders and inactive sessions', async () => {
@@ -797,7 +839,7 @@ describe('audio monitoring messages (phase 5)', () => {
     expect(
       await h.orch.handleInternal({ type: 'audio:anomalies', anomalies: [speech] }, offscreen),
     ).toEqual({ ok: true });
-    expect(h.stored()?.anomalies).toEqual([speech]);
+    expect(h.stored()?.anomalies).toMatchObject([speech]);
   });
 
   it('records that the microphone is being monitored, only while active', async () => {
@@ -836,42 +878,34 @@ describe('audio monitoring messages (phase 5)', () => {
   });
 });
 
-describe('a hung backend never blocks the session (stability-loop regression)', () => {
-  const never = () => new Promise<void>(() => undefined);
+describe('the session never waits on the network (stability-loop regression)', () => {
+  const never = <T>() => new Promise<T>(() => undefined);
 
-  it('end tears down and notifies the page while the end upload is still pending', async () => {
+  it('end makes no network call and notifies the page before queueing anything', async () => {
     const h = setup();
     await toActive(h);
-    h.deps.api.postEnd = vi.fn(never);
+    h.deps.uploads.enqueue.mockImplementation(never);
     h.calls.length = 0;
-    expect(await h.orch.handleExternal({ type: 'proctor:end' }, fromExam)).toMatchObject({
-      ok: true,
+    void h.orch.handleExternal({ type: 'proctor:end' }, fromExam);
+    await vi.waitFor(() => {
+      expect(h.calls).toContain(`page:${String(EXAM_TAB)}:ended`);
     });
-    expect(h.calls).toEqual([
-      'capture.stop',
-      `monitor.stop:${String(EXAM_TAB)}`,
-      `indicator:false:${String(EXAM_TAB)}`,
-      `page:${String(EXAM_TAB)}:ended`,
-    ]);
-    expect(h.deps.api.postEnd).toHaveBeenCalled();
-    // The queue is free: other events are handled immediately.
-    expect(await h.orch.handleExternal({ type: 'proctor:status' }, fromExam)).toMatchObject({
-      status: 'ended',
-    });
+    expect(h.deps.api.postEnd).not.toHaveBeenCalled();
+    expect(h.stored()?.session.status).toBe('ended');
   });
 
-  it('decline notifies the page while the decline upload is still pending', async () => {
+  it('decline notifies the page before queueing its record', async () => {
     const h = setup();
     await h.orch.handleExternal(START, fromExam);
-    h.deps.api.postConsent = vi.fn(never);
-    expect(
-      await h.orch.handleInternal(
-        { type: 'consent:decide', accepted: false, noticeVersion: 'v1' },
-        page,
-      ),
-    ).toEqual({ ok: true });
-    expect(h.calls).toContain(`page:${String(EXAM_TAB)}:consent_declined`);
-    expect(h.stored()?.session.status).toBe('consent_declined');
+    h.deps.uploads.enqueue.mockImplementation(never);
+    void h.orch.handleInternal(
+      { type: 'consent:decide', accepted: false, noticeVersion: 'v1' },
+      page,
+    );
+    await vi.waitFor(() => {
+      expect(h.calls).toContain(`page:${String(EXAM_TAB)}:consent_declined`);
+    });
+    expect(h.deps.api.postConsent).not.toHaveBeenCalled();
   });
 
   it('persists "ended" before teardown, so a stalled teardown cannot leave it active', async () => {
@@ -884,25 +918,18 @@ describe('a hung backend never blocks the session (stability-loop regression)', 
     });
   });
 
-  it('settled() waits for background uploads and logs their failures', async () => {
+  it('settled() waits for background work (bursts) and logs its failures', async () => {
     const h = setup();
     const log = vi.fn();
     (h.orch as unknown as { deps: OrchestratorDeps }).deps.log = log;
     await toActive(h);
-    let release: () => void = () => undefined;
-    h.deps.api.postEnd = vi.fn(
-      () =>
-        new Promise<void>((_resolve, reject) => {
-          release = () => {
-            reject(new Error('offline'));
-          };
-        }),
+    h.deps.offscreen.burst.mockRejectedValueOnce(new Error('offscreen gone'));
+    await h.orch.handleInternal(
+      { type: 'rules:event', event: { kind: 'copy', ts: h.advance(0) } },
+      content,
     );
-    await h.orch.handleExternal({ type: 'proctor:end' }, fromExam);
-    const settled = h.orch.settled();
-    release();
-    await settled;
-    expect(log).toHaveBeenCalledWith('end upload failed', expect.any(Error));
+    await h.orch.settled();
+    expect(log).toHaveBeenCalledWith('burst failed', expect.any(Error));
   });
 
   it('traces every queued task with its duration', async () => {
@@ -915,6 +942,189 @@ describe('a hung backend never blocks the session (stability-loop regression)', 
     expect(lines).toContain('task external:proctor:status start');
     expect(lines.some((l) => /^task external:proctor:status done in \d+ms$/.test(l))).toBe(true);
     expect(lines).toContain('task internal:unknown start');
+  });
+});
+
+describe('capture packages and the upload queue (phase 6)', () => {
+  const offscreen: InternalSender = { kind: 'extension_page', tabId: undefined };
+  let h: Harness;
+  beforeEach(async () => {
+    h = setup();
+    await toActive(h);
+  });
+
+  const copy = () =>
+    h.orch.handleInternal(
+      { type: 'rules:event', event: { kind: 'copy', ts: h.advance(0) } },
+      content,
+    );
+  const tick = () =>
+    h.orch.handleInternal(
+      { type: 'rules:event', event: { kind: 'tick', ts: h.advance(0) } },
+      content,
+    );
+  const anomalyItems = () => h.queued.filter((q) => q.kind === 'anomaly');
+
+  it('gives each anomaly an id, a capture window and a snapshot of the preceding events', async () => {
+    await h.orch.handleInternal(
+      { type: 'rules:event', event: { kind: 'paste', ts: h.advance(0) } },
+      content,
+    );
+    h.advance(1000);
+    await copy();
+    const [, second] = h.stored()?.anomalies ?? [];
+    expect(second).toMatchObject({
+      type: 'copy_paste',
+      id: expect.stringMatching(/^id\d+$/) as string,
+    });
+    expect(second?.closesAt).toBe((second?.ts ?? 0) + 15_000);
+    expect(second?.before.map((e) => e.type)).toEqual(['paste', 'copy']);
+  });
+
+  it('asks for a burst of frames for anomalies without frames and attaches them', async () => {
+    const frames = [{ id: 'b1', kind: 'frame' as const, ts: 1 }];
+    h.deps.offscreen.burst.mockResolvedValueOnce(frames);
+    await copy();
+    await h.orch.settled();
+    expect(h.deps.offscreen.burst).toHaveBeenCalledTimes(1);
+    expect(h.stored()?.anomalies?.[0]?.evidence).toEqual(frames);
+  });
+
+  it('does not ask for a burst for webcam anomalies, which already carry frames', async () => {
+    const phone = {
+      type: 'phone_detected',
+      ts: h.advance(0),
+      confidence: 0.8,
+      evidence: [{ id: 'f1', kind: 'frame', ts: 1 }],
+    };
+    await h.orch.handleInternal({ type: 'video:anomalies', anomalies: [phone] }, offscreen);
+    expect(h.deps.offscreen.burst).not.toHaveBeenCalled();
+  });
+
+  it('packages an anomaly only after its capture window closes', async () => {
+    await copy();
+    expect(anomalyItems()).toEqual([]);
+    h.advance(16_000);
+    await tick();
+    expect(anomalyItems()).toHaveLength(1);
+    expect(h.stored()?.anomalies?.[0]).toMatchObject({ packaged: true, before: [] });
+    expect(h.deps.uploads.kick).toHaveBeenCalled();
+    await tick(); // already packaged: not queued twice
+    expect(anomalyItems()).toHaveLength(1);
+  });
+
+  it('queues the anomaly record, then its evidence (event sequence and frames) as one group', async () => {
+    h.deps.offscreen.burst.mockResolvedValueOnce([{ id: 'b1', kind: 'frame', ts: 1 }]);
+    await copy();
+    await h.orch.settled();
+    h.advance(16_000);
+    await tick();
+    const [record] = anomalyItems();
+    const anomaly = AnomalySchema.parse(JSON.parse(record?.request.body ?? ''));
+    expect(anomaly.type).toBe('copy_paste');
+    expect(anomaly.evidence.map((e) => e.kind)).toEqual(['frame', 'event_sequence']);
+    expect(record).toMatchObject({
+      id: anomaly.id,
+      group: anomaly.id,
+      priority: priorityFor('anomaly', 'low'),
+      request: { method: 'POST', path: '/v1/sessions/s1/anomalies' },
+    });
+    const evidence = h.queued.filter((q) => q.kind === 'evidence');
+    expect(evidence.map((e) => e.id).sort()).toEqual(anomaly.evidence.map((e) => e.id).sort());
+    for (const e of evidence) expect(e).toMatchObject({ dependsOn: anomaly.id, group: anomaly.id });
+    const frame = evidence.find((e) => e.id === 'b1');
+    expect(frame?.request).toMatchObject({
+      method: 'PUT',
+      path: '/v1/sessions/s1/evidence/b1',
+      contentType: 'image/jpeg',
+      media: { store: 'frames', id: 'b1' },
+    });
+    const seq = evidence.find((e) => e.request.contentType === 'application/json');
+    expect(JSON.parse(seq?.request.body ?? '')).toMatchObject({ events: [{ type: 'copy' }] });
+  });
+
+  it('links an overlapping speech clip to other anomalies in the window', async () => {
+    const speech = {
+      type: 'speech_detected',
+      ts: h.advance(0),
+      confidence: 0.9,
+      evidence: [{ id: 'c1', kind: 'audio', ts: h.advance(0) }],
+    };
+    await h.orch.handleInternal({ type: 'audio:anomalies', anomalies: [speech] }, offscreen);
+    await copy();
+    h.advance(16_000);
+    await tick();
+    const bodies = anomalyItems().map((q) => AnomalySchema.parse(JSON.parse(q.request.body ?? '')));
+    const copyRecord = bodies.find((b) => b.type === 'copy_paste');
+    expect(copyRecord?.evidence.map((e) => e.id)).toContain('c1');
+    const clipItems = h.queued.filter((q) => q.id === 'c1');
+    expect(clipItems[0]?.request).toMatchObject({
+      contentType: 'audio/wav',
+      media: { store: 'clips', id: 'c1' },
+    });
+  });
+
+  it('prioritises severe anomalies and expires items after retentionDays', async () => {
+    const phone = {
+      type: 'phone_detected',
+      ts: h.advance(0),
+      confidence: 0.8,
+      evidence: [{ id: 'f1', kind: 'frame', ts: 1 }],
+    };
+    await h.orch.handleInternal({ type: 'video:anomalies', anomalies: [phone] }, offscreen);
+    h.advance(16_000);
+    await tick();
+    const [record] = anomalyItems();
+    expect(record?.priority).toBe(priorityFor('anomaly', 'high'));
+    expect(record?.expiresAt).toBe((record?.createdAt ?? 0) + 30 * 24 * 60 * 60 * 1000);
+    expect(record?.retry).toEqual(DEFAULT_POLICY.upload);
+  });
+
+  it('keeps an anomaly unpackaged if queueing fails, so it is retried later', async () => {
+    await copy();
+    h.advance(16_000);
+    h.deps.uploads.enqueue.mockRejectedValueOnce(new Error('storage busy'));
+    await expect(tick()).rejects.toThrow('storage busy');
+    expect(h.stored()?.anomalies?.[0]?.packaged).toBeUndefined();
+    await tick();
+    expect(h.stored()?.anomalies?.[0]?.packaged).toBe(true);
+  });
+
+  it('at session end packages open windows, includes a flushed speech clip and queues the end last', async () => {
+    h.deps.offscreen.flush.mockResolvedValueOnce([
+      {
+        type: 'speech_detected',
+        ts: h.advance(0),
+        confidence: 0.8,
+        evidence: [{ id: 'c9', kind: 'audio', ts: 1 }],
+      },
+    ]);
+    await copy(); // window still open
+    await h.orch.handleExternal({ type: 'proctor:end' }, fromExam);
+    expect(
+      anomalyItems()
+        .map((q) => JSON.parse(q.request.body ?? '{}') as { type: string })
+        .map((b) => b.type)
+        .sort(),
+    ).toEqual(['copy_paste', 'speech_detected']);
+    expect(h.stored()?.anomalies?.every((a) => a.packaged)).toBe(true);
+    expect(h.queued.at(-1)?.kind).toBe('end');
+    expect(h.deps.offscreen.burst).toHaveBeenCalledTimes(1); // the copy, not the flushed clip
+  });
+
+  it('ignores burst frames that arrive after the anomaly was packaged', async () => {
+    let release: (v: EvidenceRef[]) => void = () => undefined;
+    h.deps.offscreen.burst.mockImplementationOnce(
+      () =>
+        new Promise<EvidenceRef[]>((r) => {
+          release = r;
+        }),
+    );
+    await copy();
+    await h.orch.handleExternal({ type: 'proctor:end' }, fromExam); // packages immediately
+    release([{ id: 'late', kind: 'frame', ts: 1 }]);
+    await h.orch.settled();
+    expect(h.stored()?.anomalies?.[0]?.evidence ?? []).toEqual([]);
   });
 });
 

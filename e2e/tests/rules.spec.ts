@@ -69,7 +69,14 @@ test('the rule test page triggers all five browser violation types; the log is t
   // Privacy: type + timestamp only, nothing from the page, the URL or the keyboard.
   expect(log.length).toBeGreaterThan(0);
   for (const entry of log) expect(Object.keys(entry).sort()).toEqual(['ts', 'type']);
-  for (const a of anomalies) expect(Object.keys(a).sort()).toEqual(['confidence', 'ts', 'type']);
+  // Anomalies also carry their id, capture window, packaging state, evidence references and a
+  // snapshot of preceding events, which is itself type + timestamp only.
+  const allowed = ['before', 'closesAt', 'confidence', 'evidence', 'id', 'packaged', 'ts', 'type'];
+  for (const a of anomalies) {
+    for (const key of Object.keys(a)) expect(allowed).toContain(key);
+    const before = (a as { before?: Record<string, unknown>[] }).before ?? [];
+    for (const entry of before) expect(Object.keys(entry).sort()).toEqual(['ts', 'type']);
+  }
   const json = JSON.stringify({ log, anomalies });
   for (const leak of [
     'SECRET-ANSWER-42',

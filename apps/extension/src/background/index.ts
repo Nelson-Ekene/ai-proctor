@@ -1,11 +1,19 @@
 // MV3 service worker. Never touches camera or microphone (that is the offscreen document's job).
 // Listeners are registered synchronously at top level so Chrome can wake the worker for them.
-import { RULES_TICK_ALARM, createChromeDeps } from './chrome-deps';
+import { RULES_TICK_ALARM, UPLOAD_ALARM, createChromeDeps, createUploader } from './chrome-deps';
 import { Orchestrator } from './orchestrator';
 import { classifySender } from './sender';
 
 const config = __PROCTOR_CONFIG__;
-const orchestrator = new Orchestrator(createChromeDeps(config));
+const uploader = createUploader();
+const orchestrator = new Orchestrator(createChromeDeps(config, uploader));
+
+// Drain the persistent upload queue whenever the worker starts: after a restart, a browser
+// restart (onStartup) or when woken by the retry alarm.
+void uploader.drain();
+chrome.runtime.onStartup.addListener(() => {
+  void uploader.drain();
+});
 
 // Surface uncaught errors in the worker console (captured by the e2e diagnostics log).
 self.addEventListener('error', (event) => {
@@ -51,4 +59,5 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === RULES_TICK_ALARM) void orchestrator.handleRulesTick();
+  if (alarm.name === UPLOAD_ALARM) void uploader.drain();
 });

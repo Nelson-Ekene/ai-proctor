@@ -1,7 +1,13 @@
 // Mock exam host page (:4400) and mock proctoring API (:4401) for e2e tests and manual testing.
 // Ports can be overridden with MOCK_HOST_PORT / MOCK_API_PORT (see settings.ts).
 // Run: pnpm --filter @proctor/e2e mock   (after building the SDK and the extension)
-import { ConsentRecordSchema, DEFAULT_POLICY, EndSessionSchema, type Policy } from '@proctor/core';
+import {
+  AnomalySchema,
+  ConsentRecordSchema,
+  DEFAULT_POLICY,
+  EndSessionSchema,
+  type Policy,
+} from '@proctor/core';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, join } from 'node:path';
@@ -18,11 +24,39 @@ export interface MockState {
   ends: { sessionId: string; ts: number }[];
   /** Every API request (method, path, body bytes), to prove what was and wasn't uploaded. */
   requests: { method: string; path: string; bytes: number }[];
+  /** Anomaly records received (first delivery of each idempotency key only). */
+  anomalies: { id: string; sessionId: string; type: string; ts: number; evidenceIds: string[] }[];
+  /** Evidence bodies received (first delivery only). */
+  evidence: { id: string; sessionId: string; contentType: string; bytes: number }[];
+  /** Requests carrying an already-processed idempotency key (retries after a lost reply). */
+  duplicates: number;
+  /** Requests cut off because the simulated network was down. */
+  refused: number;
 }
 
-const state: MockState = { sessionFetches: [], consents: [], ends: [], requests: [] };
+const state: MockState = {
+  sessionFetches: [],
+  consents: [],
+  ends: [],
+  requests: [],
+  anomalies: [],
+  evidence: [],
+  duplicates: 0,
+  refused: 0,
+};
 /** Number of upcoming consent POSTs to fail with 503 (simulates an unreachable backend). */
 let failConsents = 0;
+/** Idempotency keys already processed: a repeat is acknowledged but never stored twice. */
+const seenKeys = new Set<string>();
+/**
+ * Simulated network for /v1 requests:
+ * - up: normal
+ * - down: the connection is cut before the request is processed (network loss)
+ * - drop-after: the request is processed, then the connection is cut (lost reply), `dropCount`
+ *   times
+ */
+const network = { mode: 'up' as 'up' | 'down' | 'drop-after', dropCount: 0 };
+const EVIDENCE_TYPES = new Set(['image/jpeg', 'audio/wav', 'application/json']);
 
 function send(
   res: ServerResponse,
@@ -34,10 +68,14 @@ function send(
   res.end(body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body));
 }
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
+async function readBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
-  return JSON.parse(Buffer.concat(chunks).toString('utf8') || 'null') as unknown;
+  return Buffer.concat(chunks);
+}
+
+async function readJson(req: IncomingMessage): Promise<unknown> {
+  return JSON.parse((await readBody(req)).toString('utf8') || 'null') as unknown;
 }
 
 /** Token "tok-<x>" maps to session "sess-<x>"; anything else is unauthorised. */
@@ -51,8 +89,24 @@ function sessionFor(req: IncomingMessage): string | undefined {
  * - "tok-fastidle": 3 s inactivity threshold
  * - "tok-fastvideo": one webcam sample per second, 2 s sustained gaze, quick bursts
  * - "tok-fastaudio": 2 s audio buffer, 5 s clip cap, 0.8 s silence ends a clip
+ * - "tok-fastupload": fast video + audio, short capture windows and quick upload retries
  */
 function policyFor(sessionId: string): Policy {
+  if (sessionId === 'sess-fastupload') {
+    return {
+      ...DEFAULT_POLICY,
+      sampling: { framesPerWindow: 5, windowSeconds: 5 },
+      video: { ...DEFAULT_POLICY.video, burstIntervalMs: 300 },
+      audio: { ...DEFAULT_POLICY.audio, bufferSeconds: 2, maxClipSeconds: 5, silenceEndMs: 800 },
+      capture: {
+        ...DEFAULT_POLICY.capture,
+        eventsBeforeSeconds: 5,
+        eventsAfterSeconds: 3,
+        logRetentionSeconds: 10,
+      },
+      upload: { ...DEFAULT_POLICY.upload, retryBaseMs: 500, retryMaxMs: 2000 },
+    };
+  }
   if (sessionId === 'sess-fastidle') {
     return { ...DEFAULT_POLICY, inactivity: { seconds: 3, pingSeconds: 0.5 } };
   }
@@ -138,6 +192,8 @@ interface Reply {
   status: number;
   body?: unknown;
   type?: string;
+  /** Cut the connection instead of replying (simulated network failure). */
+  destroy?: boolean;
 }
 
 async function handleHost(path: string): Promise<Reply> {
@@ -166,11 +222,25 @@ async function handleApi(req: IncomingMessage, url: URL): Promise<Reply> {
     state.consents.length = 0;
     state.ends.length = 0;
     state.requests.length = 0;
+    state.anomalies.length = 0;
+    state.evidence.length = 0;
+    state.duplicates = 0;
+    state.refused = 0;
+    seenKeys.clear();
     failConsents = 0;
+    network.mode = 'up';
+    network.dropCount = 0;
     return { status: 204 };
   }
   if (path === '/__test/fail-consents' && req.method === 'POST') {
     failConsents = Number(url.searchParams.get('count') ?? '1');
+    return { status: 204 };
+  }
+  if (path === '/__test/network' && req.method === 'POST') {
+    const mode = url.searchParams.get('mode');
+    if (mode !== 'up' && mode !== 'down' && mode !== 'drop-after') return { status: 400 };
+    network.mode = mode;
+    network.dropCount = Number(url.searchParams.get('count') ?? '0');
     return { status: 204 };
   }
 
@@ -179,17 +249,41 @@ async function handleApi(req: IncomingMessage, url: URL): Promise<Reply> {
     path,
     bytes: Number(req.headers['content-length'] ?? 0),
   });
+  if (network.mode === 'down') {
+    state.refused += 1;
+    return { status: 0, destroy: true };
+  }
   const sessionId = sessionFor(req);
   if (!sessionId) return { status: 401, body: { error: 'unauthorised' } };
 
+  const key = req.headers['idempotency-key'];
+  if (typeof key === 'string' && seenKeys.has(key)) {
+    await readBody(req);
+    state.duplicates += 1;
+    return { status: 200, body: { ok: true, duplicate: true } };
+  }
+
+  const reply = await process(req, path, sessionId);
+  if (reply.status >= 200 && reply.status < 300) {
+    if (typeof key === 'string') seenKeys.add(key);
+    if (network.mode === 'drop-after' && network.dropCount > 0) {
+      network.dropCount -= 1;
+      if (network.dropCount === 0) network.mode = 'up';
+      return { status: 0, destroy: true }; // processed, but the reply never arrives
+    }
+  }
+  return reply;
+}
+
+async function process(req: IncomingMessage, path: string, sessionId: string): Promise<Reply> {
   if (path === '/v1/sessions/current' && req.method === 'GET') {
     state.sessionFetches.push(sessionId);
     return { status: 200, body: { sessionId, policySnapshot: policyFor(sessionId) } };
   }
-  const match = /^\/v1\/sessions\/([^/]+)\/(consents|end)$/.exec(path);
-  if (match && req.method === 'POST' && decodeURIComponent(match[1] ?? '') === sessionId) {
+  const session = /^\/v1\/sessions\/([^/]+)\/(consents|end|anomalies)$/.exec(path);
+  if (session && req.method === 'POST' && decodeURIComponent(session[1] ?? '') === sessionId) {
     const body = await readJson(req);
-    if (match[2] === 'consents') {
+    if (session[2] === 'consents') {
       if (failConsents > 0) {
         failConsents -= 1;
         return { status: 503, body: { error: 'unavailable' } };
@@ -199,10 +293,38 @@ async function handleApi(req: IncomingMessage, url: URL): Promise<Reply> {
       state.consents.push({ sessionId, ...parsed.data });
       return { status: 201, body: { ok: true } };
     }
+    if (session[2] === 'anomalies') {
+      const parsed = AnomalySchema.safeParse(body);
+      if (!parsed.success) return { status: 400, body: { error: 'invalid anomaly' } };
+      const a = parsed.data;
+      state.anomalies.push({
+        id: a.id,
+        sessionId,
+        type: a.type,
+        ts: a.ts,
+        evidenceIds: a.evidence.map((e) => e.id),
+      });
+      return { status: 201, body: { ok: true } };
+    }
     const parsed = EndSessionSchema.safeParse(body);
     if (!parsed.success) return { status: 400, body: { error: 'invalid end' } };
     state.ends.push({ sessionId, ...parsed.data });
     return { status: 204 };
+  }
+  const evidence = /^\/v1\/sessions\/([^/]+)\/evidence\/([^/]+)$/.exec(path);
+  if (evidence && req.method === 'PUT' && decodeURIComponent(evidence[1] ?? '') === sessionId) {
+    const contentType = req.headers['content-type'] ?? '';
+    const bytes = await readBody(req);
+    if (!EVIDENCE_TYPES.has(contentType) || bytes.length === 0) {
+      return { status: 400, body: { error: 'invalid evidence' } };
+    }
+    state.evidence.push({
+      id: decodeURIComponent(evidence[2] ?? ''),
+      sessionId,
+      contentType,
+      bytes: bytes.length,
+    });
+    return { status: 201, body: { ok: true } };
   }
   return { status: 404, body: { error: 'not found' } };
 }
@@ -217,6 +339,10 @@ const host = createServer((req, res) => {
 const api = createServer((req, res) => {
   const url = new URL(req.url ?? '/', `http://localhost:${String(API_PORT)}`);
   void handleApi(req, url).then((r) => {
+    if (r.destroy) {
+      req.socket.destroy(); // simulated network failure: no response at all
+      return;
+    }
     send(res, r.status, r.body, r.type);
   });
 });

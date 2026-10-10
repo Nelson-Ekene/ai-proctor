@@ -103,6 +103,19 @@ export const PolicySchema = z.strictObject({
     burstIntervalMs: positive,
   }),
   retentionDays: z.number().int().positive(),
+  /** Evidence upload queue on the candidate's device (Phase 6). */
+  upload: z
+    .strictObject({
+      /** First retry delay; doubles per failed attempt (with jitter). */
+      retryBaseMs: positive,
+      /** Longest delay between retries. */
+      retryMaxMs: positive,
+      /** Local queue size cap; lowest-value anomalies (with their evidence) are evicted first. */
+      maxQueueBytes: z.number().int().positive(),
+    })
+    .refine((u) => u.retryBaseMs <= u.retryMaxMs, {
+      message: 'upload.retryBaseMs must not exceed upload.retryMaxMs',
+    }),
   /** Pre-test setup check (a readiness check for the candidate, never an exam result). */
   setupCheck: z.strictObject({
     sampleSeconds: positive,
@@ -185,6 +198,8 @@ export const DEFAULT_POLICY: Policy = deepFreeze({
     burstIntervalMs: 1000,
   },
   retentionDays: 30, // ASSUMPTION: open question in PRD
+  // ASSUMPTION: not in the PRD; tune in the pilot.
+  upload: { retryBaseMs: 2000, retryMaxMs: 300_000, maxQueueBytes: 100 * 1024 * 1024 },
   setupCheck: {
     // ASSUMPTION: none of these are in the PRD; calibrate in the pilot.
     sampleSeconds: 3,

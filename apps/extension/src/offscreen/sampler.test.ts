@@ -191,6 +191,27 @@ describe('VideoSampler privacy: only anomalous frames are kept', () => {
   });
 });
 
+describe('VideoSampler on-demand burst (phase 6)', () => {
+  it('captures a burst of unanalysed frames for an anomaly raised elsewhere', async () => {
+    const h = harness();
+    h.sampler.start();
+    const burst = h.sampler.captureBurst();
+    await vi.advanceTimersByTimeAsync(3 * 1000);
+    const evidence = await burst;
+    expect(evidence.map((e) => e.kind)).toEqual(['frame', 'frame', 'frame']);
+    // Burst frames are evidence only, never analysed (the regular 3 s sample may be).
+    const burstIds = evidence.map((e) => Number(e.id.slice(1)));
+    expect(h.analyzed.filter((id) => burstIds.includes(id))).toEqual([]);
+    expect(h.frames.every((f) => f.closed === 1)).toBe(true);
+    h.sampler.stop();
+  });
+
+  it('returns nothing once stopped', async () => {
+    const h = harness();
+    expect(await h.sampler.captureBurst()).toEqual([]);
+  });
+});
+
 describe('VideoSampler gaze and degradation', () => {
   it('raises sustained gaze-away only across consecutive away frames', async () => {
     const policy = parsePolicy({

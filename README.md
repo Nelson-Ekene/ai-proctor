@@ -136,6 +136,24 @@ Try it on the mock host with `?token=tok-fastaudio` (5 s clip cap). e2e fixtures
 example speech file (pinned SHA-256) and generated silence, played through Chrome's fake
 microphone.
 
+### Evidence upload (Phase 6)
+
+Every anomaly opens a capture window (browser events −30 s/+15 s, a burst of frames, any
+overlapping speech clip). When the window closes, the anomaly record and its evidence go into a
+persistent upload queue (IndexedDB) in the service worker:
+
+- order: consent decision → anomalies by severity (record before its evidence) → end record;
+- retries with exponential backoff (`upload.*` policy), scheduled with `chrome.alarms`, so the
+  queue survives worker and browser restarts and drains on reconnect;
+- `Idempotency-Key` = item id on every request, so retries never double-count;
+- HTTPS only (http for localhost); local media deleted once acknowledged; a size cap evicts
+  whole low-value anomaly groups.
+
+API calls: `POST /v1/sessions/:id/anomalies`, `PUT /v1/sessions/:id/evidence/:evidenceId`,
+`POST /v1/sessions/:id/consents`, `POST /v1/sessions/:id/end`. The mock API can simulate a
+network outage or lost replies (`POST /__test/network?mode=down|up|drop-after&count=N`); use
+`?token=tok-fastupload` for short windows and quick retries.
+
 ## Release checklist
 
 - [ ] **Fix the production extension ID**: use the Chrome Web Store ID, or pin a self-generated

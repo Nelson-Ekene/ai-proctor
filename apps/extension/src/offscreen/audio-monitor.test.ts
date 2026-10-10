@@ -111,8 +111,12 @@ describe('AudioMonitor', () => {
   it('completes a clip in progress when stopped, then ignores further frames', async () => {
     const h = harness(new Array<number>(30).fill(0.9));
     h.feed(10);
-    await h.monitor.stop();
+    // The flushed clip's anomalies are returned to the caller (session end), not reported.
+    const flushed = await h.monitor.stop();
     expect(h.persisted).toHaveLength(1);
+    expect(flushed.map((a) => a.type)).toEqual(['speech_detected']);
+    expect(flushed[0]?.evidence).toEqual([{ id: 'clip1', kind: 'audio', ts: 0 }]);
+    expect(h.reports).toEqual([]);
     h.feed(30);
     await h.monitor.idle();
     expect(h.persisted).toHaveLength(1);

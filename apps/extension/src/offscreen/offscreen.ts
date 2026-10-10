@@ -19,6 +19,11 @@ interface BitmapFrame extends CapturedFrame {
   bitmap: ImageBitmap;
 }
 
+/** Running analysers, reachable by the service worker's burst/stop requests. */
+let sampler: VideoSampler<BitmapFrame> | undefined;
+let monitor: AudioMonitor | undefined;
+let activeStream: MediaStream | undefined;
+
 interface CaptureContext {
   stream: MediaStream;
   policy: Policy;
@@ -65,7 +70,7 @@ async function startVideoSampling({ stream, policy, sessionId, db }: CaptureCont
     return;
   }
 
-  const sampler = new VideoSampler<BitmapFrame>({
+  sampler = new VideoSampler<BitmapFrame>({
     policy,
     now: () => Date.now(),
     rng: cryptoRng,
@@ -134,7 +139,7 @@ async function startAudioMonitoring({ stream, policy, sessionId, db }: CaptureCo
   source.connect(capture).connect(mute).connect(audio.destination);
 
   const detector = createPitchClusterDetector(policy);
-  const monitor = new AudioMonitor({
+  const audioMonitor = new AudioMonitor({
     policy,
     sampleRate: VAD_SAMPLE_RATE,
     vad,
@@ -161,18 +166,51 @@ async function startAudioMonitoring({ stream, policy, sessionId, db }: CaptureCo
     },
     log: warn,
   });
+  monitor = audioMonitor;
   // Periodic counters in the diagnostics log (no audio content).
   window.setInterval(() => {
     warn(
-      `audio stats: analysed=${String(monitor.framesAnalysed)} speech=${String(monitor.speechFrames)} clips=${String(monitor.clipsStored)} dropped=${String(monitor.dropped)} ctx=${audio.state}`,
+      `audio stats: analysed=${String(audioMonitor.framesAnalysed)} speech=${String(audioMonitor.speechFrames)} clips=${String(audioMonitor.clipsStored)} dropped=${String(audioMonitor.dropped)} ctx=${audio.state}`,
     );
   }, 5000);
   const frameMs = (512 / VAD_SAMPLE_RATE) * 1000;
   capture.port.onmessage = (event: MessageEvent<Float32Array>) => {
     // The frame just ended; stamp it with its start time.
-    monitor.push(event.data, Date.now() - frameMs);
+    audioMonitor.push(event.data, Date.now() - frameMs);
   };
 }
+
+// Requests from the service worker (Phase 6): extra frames for an anomaly raised elsewhere, and
+// a clean stop at session end that hands over a speech clip still in progress.
+chrome.runtime.onMessage.addListener((message: { type?: unknown }, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id || sender.tab) return; // only the service worker
+  if (message.type === 'offscreen:burst') {
+    (sampler?.captureBurst() ?? Promise.resolve([]))
+      .then((evidence) => {
+        sendResponse({ ok: true, evidence });
+      })
+      .catch((error: unknown) => {
+        warn('burst failed', error);
+        sendResponse({ ok: false });
+      });
+    return true;
+  }
+  if (message.type === 'offscreen:stop') {
+    sampler?.stop();
+    // Turn camera and microphone off right away; closing this document can be slow.
+    for (const track of activeStream?.getTracks() ?? []) track.stop();
+    (monitor?.stop() ?? Promise.resolve([]))
+      .then((anomalies) => {
+        sendResponse({ ok: true, anomalies });
+      })
+      .catch((error: unknown) => {
+        warn('audio flush failed', error);
+        sendResponse({ ok: false });
+      });
+    return true;
+  }
+  return undefined;
+});
 
 async function start(): Promise<void> {
   const stream = await openCamera();
@@ -180,6 +218,7 @@ async function start(): Promise<void> {
     await send({ type: 'media:state', on: false });
     return;
   }
+  activeStream = stream;
   for (const track of stream.getTracks()) {
     track.addEventListener('ended', () => {
       void send({ type: 'media:state', on: false });

@@ -69,12 +69,15 @@ export class AudioMonitor {
     return this.queue;
   }
 
-  /** Stops listening; completes a clip in progress so the speech is not lost. */
-  async stop(): Promise<void> {
+  /**
+   * Stops listening. A clip still in progress is completed and stored, and its anomalies are
+   * returned (not reported): the caller is ending the session and hands them over directly.
+   */
+  async stop(): Promise<PendingAnomaly[]> {
     this.stopped = true;
     await this.queue;
     const clip = this.recorder.flush();
-    if (clip) await this.handle(clip);
+    return clip ? this.anomaliesFor(clip) : [];
   }
 
   private async process(samples: Float32Array, ts: number): Promise<void> {
@@ -90,9 +93,14 @@ export class AudioMonitor {
   }
 
   private async handle(clip: AudioClip): Promise<void> {
+    this.deps.report(await this.anomaliesFor(clip));
+  }
+
+  /** Stores the clip as WAV evidence and returns its anomalies linked to it. */
+  private async anomaliesFor(clip: AudioClip): Promise<PendingAnomaly[]> {
     const evidence = await this.deps.persist(clip, encodeWav(clip.samples, clip.sampleRate));
     this.clipsStored += 1;
     const anomalies = clipAnomalies(clip, this.deps.detector, this.deps.policy);
-    this.deps.report(anomalies.map((a) => ({ ...a, evidence: [evidence] })));
+    return anomalies.map((a) => ({ ...a, evidence: [evidence] }));
   }
 }

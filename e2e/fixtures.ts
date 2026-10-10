@@ -58,6 +58,40 @@ class DiagnosticsLog {
   }
 }
 
+export interface LaunchOptions {
+  /** Profile directory; '' means a fresh temporary profile. Reuse one to simulate a restart. */
+  userDataDir: string;
+  fakeVideo?: VideoFixtureName | undefined;
+  fakeAudio?: AudioFixtureName | undefined;
+  videoDir?: string;
+}
+
+/** Real Chromium with the built extension and fake media devices. */
+export async function launchExtensionContext(opts: LaunchOptions): Promise<BrowserContext> {
+  const { fakeVideo, fakeAudio } = opts;
+  const context = await chromium.launchPersistentContext(opts.userDataDir, {
+    channel: 'chromium',
+    args: [
+      `--disable-extensions-except=${EXTENSION_PATH}`,
+      `--load-extension=${EXTENSION_PATH}`,
+      '--use-fake-device-for-media-stream',
+      '--use-fake-ui-for-media-stream',
+      ...(fakeVideo ? [`--use-file-for-fake-video-capture=${videoFixturePath(fakeVideo)}`] : []),
+      ...(fakeAudio ? [`--use-file-for-fake-audio-capture=${audioFixturePath(fakeAudio)}`] : []),
+    ],
+    ...(opts.videoDir ? { recordVideo: { dir: opts.videoDir } } : {}),
+  });
+  context.setDefaultTimeout(ACTION_TIMEOUT_MS);
+  context.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
+  return context;
+}
+
+/** The extension's service worker in a context (waits for it to start). */
+export async function extensionWorker(context: BrowserContext): Promise<Worker> {
+  const [existing] = context.serviceWorkers();
+  return existing ?? (await context.waitForEvent('serviceworker'));
+}
+
 function shortUrl(url: string | undefined): string {
   if (!url) return '?';
   return url.replace(/^chrome-extension:\/\/[a-p]{32}/, 'ext:').replace(/\?.*$/, '');
@@ -71,20 +105,12 @@ export const test = base.extend<Fixtures>({
   fakeAudio: [undefined, { option: true }],
   context: async ({ fakeVideo, fakeAudio }, use, testInfo) => {
     const log = new DiagnosticsLog();
-    const context = await chromium.launchPersistentContext('', {
-      channel: 'chromium',
-      args: [
-        `--disable-extensions-except=${EXTENSION_PATH}`,
-        `--load-extension=${EXTENSION_PATH}`,
-        '--use-fake-device-for-media-stream',
-        '--use-fake-ui-for-media-stream',
-        ...(fakeVideo ? [`--use-file-for-fake-video-capture=${videoFixturePath(fakeVideo)}`] : []),
-        ...(fakeAudio ? [`--use-file-for-fake-audio-capture=${audioFixturePath(fakeAudio)}`] : []),
-      ],
-      recordVideo: { dir: testInfo.outputPath('video') },
+    const context = await launchExtensionContext({
+      userDataDir: '',
+      fakeVideo,
+      fakeAudio,
+      videoDir: testInfo.outputPath('video'),
     });
-    context.setDefaultTimeout(ACTION_TIMEOUT_MS);
-    context.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
 
     for (const worker of context.serviceWorkers()) log.watchWorker(worker);
     context.on('serviceworker', (worker) => {
@@ -147,8 +173,7 @@ export const test = base.extend<Fixtures>({
     if (!failed) await rm(testInfo.outputPath('video'), { recursive: true, force: true });
   },
   serviceWorker: async ({ context }, use) => {
-    const [existing] = context.serviceWorkers();
-    await use(existing ?? (await context.waitForEvent('serviceworker')));
+    await use(await extensionWorker(context));
   },
   extensionId: async ({ serviceWorker }, use) => {
     await use(new URL(serviceWorker.url()).host);
@@ -352,6 +377,55 @@ export async function waitForAudioListening(sw: Worker, timeout = 45_000): Promi
       { timeout },
     )
     .toBe(true);
+}
+
+/** Simulated network for the mock API (see mock-server.ts). */
+export async function setNetwork(mode: 'up' | 'down' | 'drop-after', count = 0): Promise<void> {
+  await fetch(`${API_URL}/__test/network?mode=${mode}&count=${String(count)}`, { method: 'POST' });
+}
+
+export interface QueueSnapshot {
+  items: { id: string; kind: string; attempts: number }[];
+  frames: number;
+  clips: number;
+}
+
+/** The extension's persistent upload queue and locally stored media (IndexedDB). */
+export function uploadQueue(sw: Worker): Promise<QueueSnapshot> {
+  return sw.evaluate(
+    () =>
+      new Promise<QueueSnapshot>((resolve, reject) => {
+        const open = indexedDB.open('proctor-evidence');
+        open.onerror = () => {
+          reject(open.error ?? new Error('open failed'));
+        };
+        open.onsuccess = () => {
+          const db = open.result;
+          const names = ['queue', 'frames', 'clips'].filter((n) => db.objectStoreNames.contains(n));
+          if (names.length < 3) {
+            db.close();
+            resolve({ items: [], frames: 0, clips: 0 });
+            return;
+          }
+          const tx = db.transaction(names, 'readonly');
+          const items = tx.objectStore('queue').getAll();
+          const frames = tx.objectStore('frames').count();
+          const clips = tx.objectStore('clips').count();
+          tx.oncomplete = () => {
+            const rows = items.result as { id: string; kind: string; attempts: number }[];
+            resolve({
+              items: rows.map(({ id, kind, attempts }) => ({ id, kind, attempts })),
+              frames: frames.result,
+              clips: clips.result,
+            });
+            db.close();
+          };
+          tx.onerror = () => {
+            reject(tx.error ?? new Error('read failed'));
+          };
+        };
+      }),
+  );
 }
 
 /** Makes the next `count` consent uploads fail with 503. */
