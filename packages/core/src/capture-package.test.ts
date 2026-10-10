@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { openAnomaly, packageAnomaly, partitionClosed } from './capture-package';
+import {
+  EventSequenceSchema,
+  openAnomaly,
+  packageAnomaly,
+  partitionClosed,
+} from './capture-package';
 import { DEFAULT_POLICY } from './policy';
 import type { BrowserLogEntry } from './rules';
 import { AnomalySchema, type PendingAnomaly } from './schemas';
@@ -105,5 +110,27 @@ describe('packageAnomaly', () => {
     );
     const pkg = packageAnomaly(open, [], [clip], 'seq3', DEFAULT_POLICY);
     expect(pkg.anomaly.evidence.map((e) => e.id)).toEqual(['c1', 'seq3']);
+  });
+});
+
+describe('EventSequenceSchema', () => {
+  it('accepts a packaged event sequence', () => {
+    const log: BrowserLogEntry[] = [{ type: 'window_blur', ts: 100_000 }];
+    const open = openAnomaly(
+      { type: 'tab_switch_or_blur', ts: 100_000, confidence: 1 },
+      'a',
+      log,
+      DEFAULT_POLICY,
+    );
+    const pkg = packageAnomaly(open, log, [], 'seq', DEFAULT_POLICY);
+    expect(EventSequenceSchema.parse(pkg.eventSequence)).toEqual(pkg.eventSequence);
+  });
+
+  it('refuses anything beyond event type and timestamp', () => {
+    const extra = { from: 0, to: 1, events: [{ type: 'window_blur', ts: 0, url: 'https://x' }] };
+    expect(EventSequenceSchema.safeParse(extra).success).toBe(false);
+    expect(EventSequenceSchema.safeParse({ from: 0, to: 1, events: [], text: 'x' }).success).toBe(
+      false,
+    );
   });
 });

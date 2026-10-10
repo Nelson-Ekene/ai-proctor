@@ -5,6 +5,30 @@
   "description": "Fastify backend.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    "./app": "./src/app.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1149.0",
+    "@aws-sdk/s3-request-presigner": "^3.1149.0",
+    "@fastify/cors": "^11.3.1",
+    "@proctor/core": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "fastify": "^5.12.5",
+    "pdfkit": "^0.20.2",
+    "postgres": "^3.4.9",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^12.2.0",
+    "@types/pdfkit": "^0.17.6",
+    "drizzle-kit": "^0.31.11",
+    "testcontainers": "^12.2.0",
+    "tsx": "^4.23.15"
+  },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --watch --import tsx src/server.ts",
+    "start": "node --env-file-if-exists=.env --import tsx src/server.ts",
+    "seed": "node --env-file-if-exists=.env --import tsx src/seed.ts",
+    "db:generate": "drizzle-kit generate"
   }
 }

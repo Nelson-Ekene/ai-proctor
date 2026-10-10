@@ -1,6 +1,7 @@
+import { z } from 'zod';
 import { buildCaptureWindow } from './capture';
 import type { Policy } from './policy';
-import type { BrowserLogEntry } from './rules';
+import { BrowserLogEntrySchema, type BrowserLogEntry } from './rules';
 import type { Anomaly, EvidenceRef, PendingAnomaly } from './schemas';
 
 // Anomaly capture package (FR6, BUILD_PLAN Phase 6). Any anomaly (browser, video or audio)
@@ -20,11 +21,16 @@ export interface OpenAnomaly extends PendingAnomaly {
   before: BrowserLogEntry[];
 }
 
-export interface EventSequence {
-  from: number;
-  to: number;
-  events: BrowserLogEntry[];
-}
+/**
+ * The uploaded "event_sequence" evidence. Strict: event type + timestamp only, so the server can
+ * refuse anything carrying URLs, page content or keystrokes.
+ */
+export const EventSequenceSchema = z.strictObject({
+  from: z.number().nonnegative(),
+  to: z.number().nonnegative(),
+  events: z.array(BrowserLogEntrySchema),
+});
+export type EventSequence = z.infer<typeof EventSequenceSchema>;
 
 export interface AnomalyPackage {
   /** The record uploaded to the server: always links to at least the event sequence. */

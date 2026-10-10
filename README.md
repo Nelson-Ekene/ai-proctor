@@ -154,6 +154,41 @@ API calls: `POST /v1/sessions/:id/anomalies`, `PUT /v1/sessions/:id/evidence/:ev
 network outage or lost replies (`POST /__test/network?mode=down|up|drop-after&count=N`); use
 `?token=tok-fastupload` for short windows and quick retries.
 
+## Backend (Phase 7)
+
+Fastify + Postgres (Drizzle) + MinIO. Run it against the docker-compose services:
+
+```sh
+docker compose -f infra/docker-compose.yml up -d
+cp apps/api/.env.example apps/api/.env
+pnpm --filter @proctor/api seed   # prints an admin/reviewer login and an integrator API key
+pnpm --filter @proctor/api dev    # http://localhost:4000 (migrations run on start)
+```
+
+Callers and their credentials:
+
+| Caller           | Credential                                  | Can do                                           |
+| ---------------- | ------------------------------------------- | ------------------------------------------------ |
+| Integrator       | API key `pak_…` (admin creates/revokes)     | `POST /v1/sessions` (returns a session token)    |
+| Extension        | session token `pst_…` (12 h, one session)   | current/consents/anomalies/evidence/end routes   |
+| Reviewer / admin | login token `put_…` (8 h, `/v1/auth/login`) | sessions, reports, exports, evidence URLs        |
+| Admin only       | login token                                 | policies (PUT/DELETE), audit, exams, keys, users |
+
+- Anomalies are stored once per id, merged into violations and re-scored with `packages/core`
+  under the session's own policy snapshot; `GET /v1/sessions/:id/report` recomputes the score
+  and reports `reproducible: true` when it equals the stored one.
+- Evidence is accepted only if an anomaly manifest lists it, must match its kind (JPEG, WAV, or
+  an event sequence of type + timestamp only), is stored with SSE under a random key, and is
+  read only through a 60 s signed URL (`GET /v1/sessions/:id/evidence/:evidenceId/url`).
+- Audit rows for every session list, report view/export, evidence URL, policy change, login and
+  admin action (`GET /v1/audit`). Retention deletes sessions and objects after the snapshot's
+  `retentionDays` (hourly) and audit-logs each deletion.
+- Policies are versioned: organisation default plus optional per-exam override
+  (`GET/PUT /v1/policies`, `DELETE /v1/policies/exams/:examId`).
+
+Integration tests (`pnpm test`) start their own Postgres and MinIO containers with
+testcontainers, so Docker must be running. The e2e suite still uses the mock API.
+
 ## Release checklist
 
 - [ ] **Fix the production extension ID**: use the Chrome Web Store ID, or pin a self-generated
@@ -164,6 +199,8 @@ network outage or lost replies (`POST /__test/network?mode=down|up|drop-after&co
       `<all_urls>`). `src/manifest.test.ts` guards the generator.
 - [ ] **Remove unused permissions**: `alarms` is reserved for Phase 6 upload retries; drop it if
       Phase 6 does not use it. Re-check `tabs` and `offscreen` are still needed.
+- [ ] **Production storage encryption**: replace the dev `MINIO_KMS_SECRET_KEY` with a real KMS
+      (or the cloud provider's SSE) and set `S3_PUBLIC_ENDPOINT` for signed URLs.
 - [ ] **Verify CI**: the `check`, `e2e` and `infra` jobs pass on the release commit.
 
 ## Open questions
