@@ -28,7 +28,16 @@ const MODELS = [
     url: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
     sha256: '64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff',
   },
+  {
+    // Silero VAD v5 (MIT): voice-activity probability per 32 ms frame at 16 kHz.
+    file: 'silero_vad.onnx',
+    url: 'https://raw.githubusercontent.com/snakers4/silero-vad/v5.1.2/src/silero_vad/data/silero_vad.onnx',
+    sha256: '2623a2953f6ff3d2c1e61740c6cdb7168133479b267dfef114a4a3cc5bdd788f',
+  },
 ];
+
+// onnxruntime-web runtime for Silero (single-threaded SIMD build; no WebGPU/JSEP needed).
+const ORT_FILES = ['ort-wasm-simd-threaded.wasm', 'ort-wasm-simd-threaded.mjs'];
 
 // SIMD and non-SIMD builds; FilesetResolver picks one at runtime.
 const WASM_FILES = [
@@ -58,10 +67,15 @@ async function ensureModel({ file, url, sha256: expected }) {
 
 await mkdir(join(vendor, 'models'), { recursive: true });
 await mkdir(join(vendor, 'mediapipe'), { recursive: true });
+await mkdir(join(vendor, 'onnx'), { recursive: true });
 
 // The package does not export package.json; its entry bundle sits at the package root.
 const wasmDir = join(dirname(require.resolve('@mediapipe/tasks-vision')), 'wasm');
 for (const f of WASM_FILES) await copyFile(join(wasmDir, f), join(vendor, 'mediapipe', f));
+
+// onnxruntime-web's main entry lives in dist/, next to its wasm runtime files.
+const ortDir = dirname(require.resolve('onnxruntime-web'));
+for (const f of ORT_FILES) await copyFile(join(ortDir, f), join(vendor, 'onnx', f));
 
 for (const m of MODELS) console.log(`model ${m.file}: ${await ensureModel(m)}`);
 console.log('assets ready in public/vendor');

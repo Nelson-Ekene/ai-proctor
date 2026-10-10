@@ -9,4 +9,6 @@ export const REPORT_LIMITATIONS: readonly string[] = Object.freeze([
   'Webcam frames are sampled at random moments, so short events between samples can be missed.',
   'Gaze is estimated from head direction, not eye movement; a face seen fully in profile has no measurable direction.',
   'Books are detected by an on-device object model; loose paper notes are not reliably detected.',
+  'Speech is detected on the device and only a short clip is kept; whispering or very quiet speech can be missed.',
+  'Multiple voices are estimated with a low-confidence heuristic that mainly separates clearly different voice pitches; two similar voices are usually not distinguished.',
 ]);

@@ -58,7 +58,10 @@ test('declining consent starts nothing', async ({ context, host, serviceWorker }
   await expect(host.locator(INDICATOR)).toHaveCount(0);
   await expect(host.locator('#events')).not.toContainText('ready');
   expect(context.pages().some((p) => p.url().includes('setup.html'))).toBe(false);
-  expect((await mockState()).consents.map((c) => c.decision)).toEqual(['declined']);
+  // The decline record is uploaded in the background after the page is told; wait for it.
+  await expect
+    .poll(async () => (await mockState()).consents.map((c) => c.decision))
+    .toEqual(['declined']);
 });
 
 test('closing the consent tab counts as declining', async ({ context, host, serviceWorker }) => {
@@ -92,7 +95,11 @@ test('ending the session turns the camera, microphone and indicator off', async 
   await expect(host.locator(INDICATOR)).toHaveCount(0);
   expect(await badgeText(serviceWorker)).toBe('');
   await expect.poll(() => offscreenCount(serviceWorker)).toBe(0);
-  expect((await mockState()).ends.map((e) => e.sessionId)).toEqual(['sess-demo']);
+  // The end record is uploaded in the background after "ended" is delivered (a slow backend
+  // must not delay the session), so wait for it to arrive.
+  await expect
+    .poll(async () => (await mockState()).ends.map((e) => e.sessionId))
+    .toEqual(['sess-demo']);
 });
 
 test('closing the exam tab ends the session and turns media off', async ({

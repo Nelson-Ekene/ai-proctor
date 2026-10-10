@@ -288,6 +288,12 @@ False-positive marking to feed calibration; live monitoring; other browsers/mobi
   - Slow devices: when the median inference time of the last window exceeds `video.inferenceBudgetMs`, sampling drops to `video.degradedFramesPerWindow` for the rest of the session (sticky, never below the normal rate) and is recorded as `videoMeta` on the session.
   - Only anomalous frames plus `capture.burstFrames` extra frames (not analysed) are JPEG-encoded and stored (IndexedDB, extension origin) for the Phase 6 upload queue; every other frame is closed unencoded.
 - **Phase 4 e2e fixtures** are downloaded at test time (pinned SHA-256, never committed) from MediaPipe test assets, COCO val2017 and Wikimedia Commons (credits in `e2e/video-fixtures.ts`), chosen by running the bundled models over candidates.
+- **Phase 5 audio** (`packages/core/src/audio.ts`, all thresholds in `policy.audio`):
+  - Silero VAD v5 (bundled ONNX, onnxruntime-web single-threaded wasm, loaded from `vendor/onnx` via the `onnxruntime-web-use-extern-wasm` condition) scores every 32 ms frame at 16 kHz in the offscreen document (AudioWorklet → monitor).
+  - While silent, audio exists only in a rolling in-memory buffer of `audio.bufferSeconds`. A clip starts after `audio.minSpeechMs` of speech, contains the buffer + speech until `audio.silenceEndMs` of silence, and is hard-capped at `audio.maxClipSeconds`. After a capped clip nothing is recorded until silence returns, so continuous talking never becomes continuous recording.
+  - `speech_detected` is raised when its clip is stored (so it always has evidence), stamped at speech start, confidence = mean VAD probability of the speech frames. Clips are 16 kHz mono WAV in IndexedDB (`clips` store, DB v2) for the Phase 6 queue.
+  - `multiple_voices` uses the `MultiVoiceDetector` interface; the shipped `pitch-cluster-heuristic-v1` is labelled low-confidence (capped at `multiVoice.maxConfidence` 0.6). Calibrated on one real single-speaker recording: intonation reached a 1.63 pitch-group ratio, so `minPitchRatio` is 1.7 (0 false positives on that recording at 5–30 s clips). Accuracy on real multi-speaker audio is unmeasured: pilot item.
+  - The offscreen document reports `audioMeta.listening` once the model analyses live frames, and forwards its warnings/counters to the service-worker log (`diag` messages) for diagnostics.
 
 ## 12. Known gaps
 
@@ -300,3 +306,7 @@ False-positive marking to feed calibration; live monitoring; other browsers/mobi
 - Phase 4: the Face Landmarker returns no pose for a face seen fully in profile, so an extreme head turn reads as "face present, direction unknown", not gaze away. Documented in `REPORT_LIMITATIONS`.
 - Phase 4: EfficientDet-Lite0 scores isolated books and shelves low (0.2–0.45 in our probes); a book held/read in front of the camera scores ~0.7. Loose paper notes are not a COCO class and are not detected. Documented in `REPORT_LIMITATIONS`.
 - Phase 4: no lighter model variant exists for the face landmarker/object detector in the bundle, so slow-device degradation lowers the sampling rate only.
+- Phase 5: the multiple-voice heuristic mostly misses two voices of similar pitch (e.g. two adult men) and has not been measured on real multi-speaker audio; documented in `REPORT_LIMITATIONS`, to be calibrated or replaced (speaker embeddings) in the pilot.
+- Phase 5: when a session ends mid-speech, the in-progress clip is lost because closing the offscreen document stops it before `AudioMonitor.stop()` can flush. Phase 6 should message the offscreen document to flush before closing it.
+- Phase 5: the extension build is ~49 MB (MediaPipe wasm SIMD + non-SIMD ~23 MB, onnxruntime wasm 14 MB, models ~13 MB). Track in the Phase 9 performance budget (e.g. drop the non-SIMD MediaPipe build if all target Chrome versions have SIMD).
+- Phase 5 e2e: audio scenarios load four models before speech can be detected; under heavy CPU load (e.g. another Chrome running the extension with live models) model start-up takes tens of seconds, so tests time speech from `audioMeta.listening`, not from session start.

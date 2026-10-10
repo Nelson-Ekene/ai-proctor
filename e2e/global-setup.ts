@@ -1,6 +1,7 @@
 import { readFile, readdir, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { prepareAudioFixtures } from './audio-fixtures.ts';
 import { prepareVideoFixtures } from './video-fixtures.ts';
 
 // Prepares the webcam fixtures (download once, verify, convert; see video-fixtures.ts).
@@ -22,6 +23,7 @@ async function failed(reportDir: string): Promise<boolean> {
 
 export default async function globalSetup(): Promise<void> {
   await prepareVideoFixtures();
+  await prepareAudioFixtures();
   await prunePassingRuns();
 }
 

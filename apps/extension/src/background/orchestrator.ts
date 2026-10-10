@@ -22,6 +22,7 @@ import {
   InternalRequestSchema,
   NOTICE_VERSION,
   type InternalError,
+  type AudioMetaRecord,
   type InternalResponse,
   type VideoMetaRecord,
 } from '../messages';
@@ -41,6 +42,8 @@ export interface StoredSession {
   anomalies?: PendingAnomaly[];
   /** Webcam sampling state, e.g. reduced rate on a slow device (Phase 4). */
   videoMeta?: VideoMetaRecord;
+  /** Microphone monitoring state (Phase 5). */
+  audioMeta?: AudioMetaRecord;
 }
 
 /** chrome.alarms cannot fire more often than every 30 s. */
@@ -270,9 +273,11 @@ export class Orchestrator {
             : internalFail('wrong_state');
 
         case 'video:anomalies':
+        case 'audio:anomalies': {
           if (session.status !== 'active') return internalFail('wrong_state');
-          // The offscreen document may only report webcam findings.
-          if (request.anomalies.some((a) => categoryOf(a.type) !== 'video')) {
+          // Each channel may only report its own category (webcam / microphone findings).
+          const category = request.type === 'video:anomalies' ? 'video' : 'audio';
+          if (request.anomalies.some((a) => categoryOf(a.type) !== category)) {
             return internalFail('invalid_request');
           }
           await this.deps.store.set({
@@ -280,10 +285,20 @@ export class Orchestrator {
             anomalies: [...(stored.anomalies ?? []), ...request.anomalies],
           });
           return { ok: true };
+        }
 
         case 'video:meta':
           if (session.status !== 'active') return internalFail('wrong_state');
           await this.deps.store.set({ ...stored, videoMeta: request.meta });
+          return { ok: true };
+
+        case 'audio:meta':
+          if (session.status !== 'active') return internalFail('wrong_state');
+          await this.deps.store.set({ ...stored, audioMeta: request.meta });
+          return { ok: true };
+
+        case 'diag':
+          this.deps.trace?.(`offscreen: ${request.message}`);
           return { ok: true };
       }
     });

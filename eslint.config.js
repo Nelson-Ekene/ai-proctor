@@ -12,6 +12,7 @@ export default tseslint.config(
       '**/public/vendor/**',
       '**/test-results/**',
       '**/playwright-report/**',
+      'e2e/.cache/**',
     ],
   },
   js.configs.recommended,
@@ -60,6 +61,13 @@ export default tseslint.config(
           ],
         },
       ],
+    },
+  },
+  {
+    // AudioWorklet global scope.
+    files: ['apps/extension/public/worklets/**/*.js'],
+    languageOptions: {
+      globals: { AudioWorkletProcessor: 'readonly', registerProcessor: 'readonly' },
     },
   },
   {

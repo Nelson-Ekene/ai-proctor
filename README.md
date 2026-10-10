@@ -118,6 +118,24 @@ e2e fixtures (`e2e/video-fixtures.ts`) are downloaded once at test time with pin
 hashes, letterboxed to 640×480 and played through Chrome's fake camera as MJPEG; nothing is
 committed. Use `?token=tok-fastvideo` on the mock host for one sample per second.
 
+### Microphone monitoring (Phase 5)
+
+In the same offscreen document, the microphone goes through an AudioWorklet (16 kHz, 32 ms
+frames) into Silero VAD (bundled ONNX model on onnxruntime-web, no runtime downloads):
+
+- While nobody speaks, audio exists only in a rolling in-memory buffer (`audio.bufferSeconds`,
+  10 s). Nothing is stored or uploaded.
+- When speech lasts `audio.minSpeechMs`, a clip is kept: the buffer plus audio until
+  `audio.silenceEndMs` of silence, never longer than `audio.maxClipSeconds` (30 s). After a
+  capped clip, nothing is recorded again until there is silence.
+- Each clip is stored as WAV evidence (IndexedDB, extension origin) and linked to
+  `speech_detected`, plus `multiple_voices` if the heuristic indicates it. The multiple-voice
+  check is a labelled low-confidence pitch heuristic behind the `MultiVoiceDetector` interface.
+
+Try it on the mock host with `?token=tok-fastaudio` (5 s clip cap). e2e fixtures: Silero's
+example speech file (pinned SHA-256) and generated silence, played through Chrome's fake
+microphone.
+
 ## Release checklist
 
 - [ ] **Fix the production extension ID**: use the Chrome Web Store ID, or pin a self-generated

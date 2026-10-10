@@ -24,7 +24,7 @@ describe('DEFAULT_POLICY', () => {
     expect(DEFAULT_POLICY.severityPoints).toEqual({ low: 5, medium: 15, high: 30 });
     expect(DEFAULT_POLICY.bands).toEqual({ lowMax: 29, mediumMax: 59 });
     expect(DEFAULT_POLICY.sampling).toEqual({ framesPerWindow: 5, windowSeconds: 30 });
-    expect(DEFAULT_POLICY.audio).toEqual({ bufferSeconds: 10, maxClipSeconds: 30 });
+    expect(DEFAULT_POLICY.audio).toMatchObject({ bufferSeconds: 10, maxClipSeconds: 30 });
     expect(DEFAULT_POLICY.capture).toMatchObject({
       eventsBeforeSeconds: 30,
       eventsAfterSeconds: 15,

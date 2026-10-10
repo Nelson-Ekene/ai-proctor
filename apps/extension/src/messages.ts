@@ -14,6 +14,15 @@ export const VideoMetaSchema = z.strictObject({
 });
 export type VideoMetaRecord = z.infer<typeof VideoMetaSchema>;
 
+/** Microphone monitoring state recorded on the session (Phase 5). */
+export const AudioMetaSchema = z.strictObject({
+  /** True once the voice-activity model is analysing live microphone frames. */
+  listening: z.boolean(),
+  /** Identifies the multiple-voice implementation used (it is a low-confidence heuristic). */
+  multiVoiceMethod: z.string().min(1),
+});
+export type AudioMetaRecord = z.infer<typeof AudioMetaSchema>;
+
 // Messages inside the extension (pages, offscreen document, content script <-> service worker).
 
 /** Version of the consent notice text; bump when the wording changes. */
@@ -49,6 +58,13 @@ export const InternalRequestSchema = z.discriminatedUnion('type', [
     anomalies: z.array(PendingAnomalySchema).min(1),
   }),
   z.strictObject({ type: z.literal('video:meta'), meta: VideoMetaSchema }),
+  z.strictObject({
+    type: z.literal('audio:anomalies'),
+    anomalies: z.array(PendingAnomalySchema).min(1),
+  }),
+  z.strictObject({ type: z.literal('audio:meta'), meta: AudioMetaSchema }),
+  // Diagnostics from the offscreen document (its console is not visible to tests).
+  z.strictObject({ type: z.literal('diag'), message: z.string().max(500) }),
   // content script
   z.strictObject({ type: z.literal('content:get') }),
   // Raw browser event for the rule engine. The event schema strips any field other than

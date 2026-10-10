@@ -12,6 +12,7 @@
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",
     "@proctor/core": "workspace:*",
+    "onnxruntime-web": "^1.30.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {

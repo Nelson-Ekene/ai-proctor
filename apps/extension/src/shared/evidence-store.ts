@@ -5,6 +5,8 @@ import type { EvidenceRef } from '@proctor/core';
 
 export const EVIDENCE_DB = 'proctor-evidence';
 export const FRAME_STORE = 'frames';
+/** Audio clips (Phase 5): only clips of detected speech, never continuous audio. */
+export const CLIP_STORE = 'clips';
 
 export interface StoredFrame {
   id: string;
@@ -26,13 +28,35 @@ function request<T>(req: IDBRequest<T>): Promise<T> {
   });
 }
 
+export interface StoredClip {
+  id: string;
+  sessionId: string;
+  /** Clip start, epoch ms. */
+  ts: number;
+  durationMs: number;
+  kind: 'audio';
+  mime: string;
+  blob: Blob;
+}
+
 export function openEvidenceDb(): Promise<IDBDatabase> {
-  const open = indexedDB.open(EVIDENCE_DB, 1);
+  // v1: frames (Phase 4); v2: clips (Phase 5).
+  const open = indexedDB.open(EVIDENCE_DB, 2);
   open.onupgradeneeded = () => {
-    const store = open.result.createObjectStore(FRAME_STORE, { keyPath: 'id' });
-    store.createIndex('sessionId', 'sessionId');
+    const db = open.result;
+    for (const name of [FRAME_STORE, CLIP_STORE]) {
+      if (!db.objectStoreNames.contains(name)) {
+        db.createObjectStore(name, { keyPath: 'id' }).createIndex('sessionId', 'sessionId');
+      }
+    }
   };
   return request(open);
+}
+
+export async function putClip(db: IDBDatabase, clip: StoredClip): Promise<EvidenceRef> {
+  const tx = db.transaction(CLIP_STORE, 'readwrite');
+  await request(tx.objectStore(CLIP_STORE).put(clip));
+  return { id: clip.id, kind: 'audio', ts: clip.ts };
 }
 
 export async function putFrame(db: IDBDatabase, frame: StoredFrame): Promise<EvidenceRef> {

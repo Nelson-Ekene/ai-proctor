@@ -782,6 +782,60 @@ describe('video sampling messages (phase 4)', () => {
   });
 });
 
+describe('audio monitoring messages (phase 5)', () => {
+  const offscreen: InternalSender = { kind: 'extension_page', tabId: undefined };
+  const speech = {
+    type: 'speech_detected',
+    ts: 7000,
+    confidence: 0.86,
+    evidence: [{ id: 'c1', kind: 'audio', ts: 6000 }],
+  };
+
+  it('stores audio anomalies with their clip evidence while active', async () => {
+    const h = setup();
+    await toActive(h);
+    expect(
+      await h.orch.handleInternal({ type: 'audio:anomalies', anomalies: [speech] }, offscreen),
+    ).toEqual({ ok: true });
+    expect(h.stored()?.anomalies).toEqual([speech]);
+  });
+
+  it('records that the microphone is being monitored, only while active', async () => {
+    const h = setup();
+    const meta = { listening: true, multiVoiceMethod: 'pitch-cluster-heuristic-v1' };
+    await h.orch.handleExternal(START, fromExam);
+    expect(await h.orch.handleInternal({ type: 'audio:meta', meta }, offscreen)).toEqual({
+      ok: false,
+      error: 'wrong_state',
+    });
+    await toActive(h);
+    expect(await h.orch.handleInternal({ type: 'audio:meta', meta }, offscreen)).toEqual({
+      ok: true,
+    });
+    expect(h.stored()?.audioMeta).toEqual(meta);
+  });
+
+  it('accepts only audio findings on the audio channel, and only while active', async () => {
+    const h = setup();
+    await h.orch.handleExternal(START, fromExam);
+    expect(
+      await h.orch.handleInternal({ type: 'audio:anomalies', anomalies: [speech] }, offscreen),
+    ).toEqual({ ok: false, error: 'wrong_state' });
+    await toActive(h);
+    const notAudio = { ...speech, type: 'phone_detected' };
+    expect(
+      await h.orch.handleInternal({ type: 'audio:anomalies', anomalies: [notAudio] }, offscreen),
+    ).toEqual({ ok: false, error: 'invalid_request' });
+    expect(
+      await h.orch.handleInternal({ type: 'video:anomalies', anomalies: [speech] }, offscreen),
+    ).toEqual({ ok: false, error: 'invalid_request' });
+    expect(
+      await h.orch.handleInternal({ type: 'audio:anomalies', anomalies: [speech] }, content),
+    ).toEqual({ ok: false, error: 'not_allowed' });
+    expect(h.stored()?.anomalies).toEqual([]);
+  });
+});
+
 describe('a hung backend never blocks the session (stability-loop regression)', () => {
   const never = () => new Promise<void>(() => undefined);
 

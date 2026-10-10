@@ -33,7 +33,31 @@ export const PolicySchema = z.strictObject({
       message: 'sampling slots must be at least 1 ms wide',
     }),
   audio: z
-    .strictObject({ bufferSeconds: positive, maxClipSeconds: positive })
+    .strictObject({
+      /** In-memory rolling buffer kept before speech starts (never stored unless speech). */
+      bufferSeconds: positive,
+      /** Hard cap on one evidence clip, including the buffer. */
+      maxClipSeconds: positive,
+      /** Voice-activity probability (0-1) at or above which a frame counts as speech. */
+      vadThreshold: z.number().min(0).max(1),
+      /** Continuous speech needed before a clip starts (ignores coughs and clicks). */
+      minSpeechMs: positive,
+      /** Silence that ends a clip, and that must pass after a capped clip before the next. */
+      silenceEndMs: positive,
+      /**
+       * Multiple-voice heuristic (pitch clustering). Unvalidated: confidence is capped at
+       * maxConfidence and must be calibrated in the pilot.
+       */
+      multiVoice: z.strictObject({
+        /** Ratio between the two pitch clusters' medians that suggests two speakers. */
+        minPitchRatio: z.number().gt(1),
+        /** Share of voiced frames each cluster must hold (0-0.5). */
+        minClusterShare: z.number().min(0).max(0.5),
+        maxConfidence: z.number().min(0).max(1),
+        /** Confidence needed to raise multiple_voices. */
+        minConfidence: z.number().min(0).max(1),
+      }),
+    })
     .refine((a) => a.bufferSeconds <= a.maxClipSeconds, {
       message: 'audio.bufferSeconds must not exceed audio.maxClipSeconds',
     }),
@@ -125,7 +149,22 @@ export const DEFAULT_POLICY: Policy = deepFreeze({
     multiple_voices: 'high',
   },
   sampling: { framesPerWindow: 5, windowSeconds: 30 },
-  audio: { bufferSeconds: 10, maxClipSeconds: 30 },
+  audio: {
+    bufferSeconds: 10,
+    maxClipSeconds: 30,
+    // ASSUMPTION: VAD and multi-voice numbers are not in the PRD; calibrate in the pilot.
+    vadThreshold: 0.5,
+    minSpeechMs: 250,
+    silenceEndMs: 1500,
+    // Measured on a 60 s single-speaker recording: natural intonation reached a 1.63 pitch-group
+    // ratio, so 1.7 avoids those false positives; similar-pitch voices are mostly missed.
+    multiVoice: {
+      minPitchRatio: 1.7,
+      minClusterShare: 0.25,
+      maxConfidence: 0.6,
+      minConfidence: 0.3,
+    },
+  },
   capture: {
     eventsBeforeSeconds: 30,
     eventsAfterSeconds: 15,

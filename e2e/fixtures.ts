@@ -19,6 +19,7 @@ import {
 } from '@proctor/core';
 import type { MockState } from './mock-server.ts';
 import { ACTION_TIMEOUT_MS, API_URL, HOST_URL, NAVIGATION_TIMEOUT_MS } from './settings.ts';
+import { audioFixturePath, type AudioFixtureName } from './audio-fixtures.ts';
 import { videoFixturePath, type VideoFixtureName } from './video-fixtures.ts';
 
 /** Built extension under test. PW_EXTENSION_PATH lets the stability loop pin a snapshot. */
@@ -30,6 +31,8 @@ export { API_URL, HOST_URL };
 interface Fixtures {
   /** Scene for the fake camera (see video-fixtures.ts); default: Chrome's test pattern. */
   fakeVideo: VideoFixtureName | undefined;
+  /** Sound for the fake microphone (see audio-fixtures.ts); default: Chrome's beep. */
+  fakeAudio: AudioFixtureName | undefined;
   context: BrowserContext;
   serviceWorker: Worker;
   extensionId: string;
@@ -65,7 +68,8 @@ export const test = base.extend<Fixtures>({
   // Playwright's trace/video/screenshot options only cover contexts it creates, so this
   // persistent context applies the same policies (playwright.config.ts) by hand.
   fakeVideo: [undefined, { option: true }],
-  context: async ({ fakeVideo }, use, testInfo) => {
+  fakeAudio: [undefined, { option: true }],
+  context: async ({ fakeVideo, fakeAudio }, use, testInfo) => {
     const log = new DiagnosticsLog();
     const context = await chromium.launchPersistentContext('', {
       channel: 'chromium',
@@ -75,6 +79,7 @@ export const test = base.extend<Fixtures>({
         '--use-fake-device-for-media-stream',
         '--use-fake-ui-for-media-stream',
         ...(fakeVideo ? [`--use-file-for-fake-video-capture=${videoFixturePath(fakeVideo)}`] : []),
+        ...(fakeAudio ? [`--use-file-for-fake-audio-capture=${audioFixturePath(fakeAudio)}`] : []),
       ],
       recordVideo: { dir: testInfo.outputPath('video') },
     });
@@ -122,6 +127,12 @@ export const test = base.extend<Fixtures>({
         }
       }
     }
+    // Attach diagnostics before closing: if closing is slow (e.g. a loaded machine) and the
+    // teardown times out, the log must already be in the report.
+    await testInfo.attach('extension-diagnostics.log', {
+      body: log.lines.join('\n') || '(no output)',
+      contentType: 'text/plain',
+    });
     await context.close();
 
     // Videos are finalised on close: keep them only for failures.
@@ -134,11 +145,6 @@ export const test = base.extend<Fixtures>({
         });
     }
     if (!failed) await rm(testInfo.outputPath('video'), { recursive: true, force: true });
-
-    await testInfo.attach('extension-diagnostics.log', {
-      body: log.lines.join('\n') || '(no output)',
-      contentType: 'text/plain',
-    });
   },
   serviceWorker: async ({ context }, use) => {
     const [existing] = context.serviceWorkers();
@@ -279,6 +285,73 @@ export function evidenceFrames(sw: Worker): Promise<StoredFrameInfo[]> {
         };
       }),
   );
+}
+
+export interface StoredClipInfo {
+  id: string;
+  sessionId: string;
+  ts: number;
+  durationMs: number;
+  mime: string;
+  bytes: number;
+  /** Duration read from the WAV header itself. */
+  wavSeconds: number;
+}
+
+/** Audio clips the extension stored locally (IndexedDB, extension origin). */
+export function evidenceClips(sw: Worker): Promise<StoredClipInfo[]> {
+  return sw.evaluate(
+    () =>
+      new Promise<StoredClipInfo[]>((resolve, reject) => {
+        const open = indexedDB.open('proctor-evidence');
+        open.onerror = () => {
+          reject(open.error ?? new Error('open failed'));
+        };
+        open.onsuccess = () => {
+          const db = open.result;
+          if (!db.objectStoreNames.contains('clips')) {
+            db.close();
+            resolve([]);
+            return;
+          }
+          const req = db.transaction('clips', 'readonly').objectStore('clips').getAll();
+          req.onsuccess = () => {
+            const rows = req.result as (Omit<StoredClipInfo, 'bytes' | 'wavSeconds'> & {
+              blob: Blob;
+            })[];
+            void Promise.all(
+              rows.map(async ({ blob, ...meta }) => {
+                const view = new DataView(await blob.arrayBuffer());
+                const wavSeconds = view.getUint32(40, true) / view.getUint32(28, true);
+                return { ...meta, bytes: blob.size, wavSeconds };
+              }),
+            ).then(resolve, reject);
+            db.close();
+          };
+          req.onerror = () => {
+            reject(req.error ?? new Error('read failed'));
+          };
+        };
+      }),
+  );
+}
+
+/**
+ * Resolves once the offscreen document reports the voice-activity model is analysing live
+ * microphone frames (model loading time excluded from what a test then measures).
+ */
+export async function waitForAudioListening(sw: Worker, timeout = 45_000): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        sw.evaluate(async () => {
+          const data = await chrome.storage.session.get('proctor.session');
+          return (data['proctor.session'] as { audioMeta?: { listening: boolean } } | undefined)
+            ?.audioMeta?.listening;
+        }),
+      { timeout },
+    )
+    .toBe(true);
 }
 
 /** Makes the next `count` consent uploads fail with 503. */

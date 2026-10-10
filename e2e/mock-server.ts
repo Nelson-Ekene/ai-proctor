@@ -50,10 +50,18 @@ function sessionFor(req: IncomingMessage): string | undefined {
  * Test policies so tests (and humans) need not wait for production timings:
  * - "tok-fastidle": 3 s inactivity threshold
  * - "tok-fastvideo": one webcam sample per second, 2 s sustained gaze, quick bursts
+ * - "tok-fastaudio": 2 s audio buffer, 5 s clip cap, 0.8 s silence ends a clip
  */
 function policyFor(sessionId: string): Policy {
   if (sessionId === 'sess-fastidle') {
     return { ...DEFAULT_POLICY, inactivity: { seconds: 3, pingSeconds: 0.5 } };
+  }
+  if (sessionId === 'sess-fastaudio') {
+    // Short buffer and a 5 s clip cap so the cap is exercised within seconds.
+    return {
+      ...DEFAULT_POLICY,
+      audio: { ...DEFAULT_POLICY.audio, bufferSeconds: 2, maxClipSeconds: 5, silenceEndMs: 800 },
+    };
   }
   if (sessionId === 'sess-fastvideo') {
     return {
