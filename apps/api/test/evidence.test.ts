@@ -163,3 +163,32 @@ describe('evidence access', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+describe('event sequence content', () => {
+  it('returns the stored sequence to reviewers, audited', async () => {
+    const { s, seqId, frameId } = await sessionWithEvidence();
+    const seq = { from: T0 - 30_000, to: T0 + 15_000, events: [{ type: 'paste', ts: T0 }] };
+    await putEvidence(ctx, s, seqId, 'application/json', JSON.stringify(seq));
+    const get = (evidenceId: string) =>
+      call(ctx.app, ctx.orgA.reviewerToken, {
+        method: 'GET',
+        url: `/v1/sessions/${s.sessionId}/evidence/${evidenceId}/events`,
+      });
+    const res = await get(seqId);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(seq);
+
+    const audit = await call(ctx.app, ctx.orgA.adminToken, {
+      method: 'GET',
+      url: '/v1/audit?limit=5',
+    });
+    const entries = audit.json<{ action: string; targetId: string }[]>();
+    expect(
+      entries.some((e) => e.action === 'evidence.view' && e.targetId === `${s.sessionId}/${seqId}`),
+    ).toBe(true);
+
+    // Media is never returned through this route.
+    await putEvidence(ctx, s, frameId, 'image/jpeg', JPEG);
+    expect((await get(frameId)).statusCode).toBe(404);
+  });
+});

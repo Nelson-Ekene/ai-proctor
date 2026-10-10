@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { VIOLATION_LABELS } from '../src/report';
+import { VIOLATION_LABELS } from '@proctor/core';
 
 // CLAUDE.md: advisory only. No pass/fail/disqualify/block/end-test state in the API or DB.
 

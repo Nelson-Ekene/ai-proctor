@@ -310,6 +310,15 @@ False-positive marking to feed calibration; live monitoring; other browsers/mobi
   - Retention runs hourly: sessions whose end (or start, if never ended) is older than the snapshot's `retentionDays` are deleted with their objects; each deletion is audit-logged and the audit trail is kept. If the objects cannot be deleted the session is kept and retried. Expired login tokens are purged too.
   - Policies are append-only versions: organisation default and per-exam overrides; removing an override appends a null version (inherit). New sessions snapshot the effective policy.
   - API port defaults to 4000 (4400/4401 stay with the mock server).
+- **Phase 8 dashboard** (`apps/dashboard`):
+  - Same-origin API calls (`/v1/...`); Vite proxies them to the API in development (`PROCTOR_API_URL`), so no CORS setup is needed. In production the dashboard is served behind the same origin as the API (or `CORS_ORIGINS` is set).
+  - The login token is kept in `sessionStorage` (per tab, cleared when the tab closes); a 401 signs the user out.
+  - A four-route history router is built in (no routing library); filters are URL query parameters.
+  - Reviewer wording (violation labels, Low/Medium/High risk, "Flagged for review") moved to `packages/core/src/labels.ts`, shared by the dashboard and the PDF export.
+  - Evidence: frames and clips load through 60 s signed URLs (each request audited); event sequences come from a new audited `GET /v1/sessions/:id/evidence/:evidenceId/events` route, so the browser never needs storage CORS.
+  - "Preview score impact" re-scores the sample session's stored violations with core `computeRisk` under the draft policy. Merging is not redone: a new merge window only affects sessions that start under it.
+  - Demo data (`seed --demo`, `apps/api/src/demo.ts`) goes through the real ingestion and evidence code; frames are drawn shapes (jpeg-js) and clips are tones, never real people. The first demo session is the PRD sample (49.0 Medium risk).
+  - UI language audit: a test scans every dashboard source file (CSS class lists excluded) for verdict words.
 
 ## 12. Known gaps
 
@@ -331,5 +340,8 @@ False-positive marking to feed calibration; live monitoring; other browsers/mobi
 - Phase 7: no login rate limiting or account lockout yet (Phase 9 hardening); no password reset flow.
 - Phase 7: the e2e suite still runs the extension against the mock API; the extension↔API contract is covered by API integration tests that send the exact packages core builds. Running the e2e suite against the real API is a Phase 9 item.
 - Phase 7: the server runs TypeScript through `tsx`; there is no compiled production build yet.
+- Phase 8: the dashboard has no admin screens for users, API keys, exams or the audit log yet (the API routes exist); exams are created via `POST /v1/exams`.
+- Phase 8: "preview score impact" uses one sample session at a time; no batch preview across many sessions.
+- Phase 8: reviewer time per session is not measured yet (Phase 9 metrics).
 - Phase 5: the extension build is ~49 MB (MediaPipe wasm SIMD + non-SIMD ~23 MB, onnxruntime wasm 14 MB, models ~13 MB). Track in the Phase 9 performance budget (e.g. drop the non-SIMD MediaPipe build if all target Chrome versions have SIMD).
 - Phase 5 e2e: audio scenarios load four models before speech can be detected; under heavy CPU load (e.g. another Chrome running the extension with live models) model start-up takes tens of seconds, so tests time speech from `audioMeta.listening`, not from session start.

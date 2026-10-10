@@ -1,4 +1,4 @@
-import { PolicySchema, RiskBandSchema } from '@proctor/core';
+import { EventSequenceSchema, PolicySchema, RiskBandSchema } from '@proctor/core';
 import { and, count, desc, eq, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -189,10 +189,8 @@ export function registerDashboardRoutes(app: FastifyInstance, deps: AppDeps): vo
       .send(pdf);
   });
 
-  /** A short-lived signed URL for one evidence item, issued after an audited access check. */
-  app.get('/v1/sessions/:id/evidence/:evidenceId/url', async (req) => {
-    const principal = await user(req);
-    const { id, evidenceId } = parse(EvidenceUrlParams, req.params);
+  /** An uploaded evidence item of the caller's organisation, audited before it is returned. */
+  async function viewEvidence(principal: UserPrincipal, id: string, evidenceId: string) {
     await ownSession(principal, id);
     const [item] = await db
       .select()
@@ -205,6 +203,14 @@ export function registerDashboardRoutes(app: FastifyInstance, deps: AppDeps): vo
       targetId: `${id}/${evidenceId}`,
       details: { kind: item.kind },
     });
+    return { ...item, storageKey: item.storageKey };
+  }
+
+  /** A short-lived signed URL for one evidence item, issued after an audited access check. */
+  app.get('/v1/sessions/:id/evidence/:evidenceId/url', async (req) => {
+    const principal = await user(req);
+    const { id, evidenceId } = parse(EvidenceUrlParams, req.params);
+    const item = await viewEvidence(principal, id, evidenceId);
     const ttl = config.EVIDENCE_URL_TTL_SECONDS;
     return {
       url: await storage.signedUrl(item.storageKey, ttl),
@@ -212,6 +218,16 @@ export function registerDashboardRoutes(app: FastifyInstance, deps: AppDeps): vo
       kind: item.kind,
       contentType: item.contentType,
     };
+  });
+
+  /** The browser event sequence of an anomaly (event type + timestamp only), audited. */
+  app.get('/v1/sessions/:id/evidence/:evidenceId/events', async (req) => {
+    const principal = await user(req);
+    const { id, evidenceId } = parse(EvidenceUrlParams, req.params);
+    const item = await viewEvidence(principal, id, evidenceId);
+    if (item.kind !== 'event_sequence') throw notFound('not an event sequence');
+    const raw: unknown = JSON.parse((await storage.get(item.storageKey)).toString('utf8'));
+    return EventSequenceSchema.parse(raw);
   });
 
   // --- policies -----------------------------------------------------------------------------

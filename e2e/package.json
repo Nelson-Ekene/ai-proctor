@@ -2,19 +2,22 @@
   "name": "@proctor/e2e",
   "version": "0.0.0",
   "private": true,
-  "description": "Playwright end-to-end tests: real Chromium, built extension, fake camera/mic, mock host and API.",
+  "description": "Playwright end-to-end tests: the extension (real Chromium, fake camera/mic, mock host and API) and the dashboard (real API, Postgres and MinIO).",
   "type": "module",
   "scripts": {
     "mock": "tsx mock-server.ts",
     "test": "playwright test",
-    "loop": "node scripts/loop.mjs"
+    "loop": "node scripts/loop.mjs",
+    "test:dashboard": "playwright test -c playwright.dashboard.config.ts"
   },
   "dependencies": {
     "@proctor/core": "workspace:*"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
+    "@testcontainers/postgresql": "^12.2.0",
     "@types/chrome": "^0.3.4",
+    "testcontainers": "^12.2.0",
     "tsx": "^4.23.15"
   }
 }

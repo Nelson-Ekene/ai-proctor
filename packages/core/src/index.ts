@@ -16,3 +16,4 @@ export * from './video';
 export * from './audio';
 export * from './upload';
 export * from './capture-package';
+export * from './labels';

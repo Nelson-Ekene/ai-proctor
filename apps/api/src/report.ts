@@ -1,12 +1,13 @@
 import {
   computeRisk,
+  BAND_LABELS,
   REPORT_LIMITATIONS,
+  VIOLATION_LABELS,
   type CategoryResult,
   type EvidenceRef,
   type Policy,
   type RiskBand,
   type Violation,
-  type ViolationType,
 } from '@proctor/core';
 import { eq } from 'drizzle-orm';
 import PDFDocument from 'pdfkit';
@@ -17,22 +18,6 @@ import { storedViolations } from './ingest';
 // The session report (FR10-FR12). Advisory: it ranks moments for human review and never states
 // a verdict. The score is recomputed from the stored violations + the session's policy
 // snapshot on every request, and compared with the stored score as a reproducibility check.
-
-/** Plain-language names for reviewers (neutral wording: these are flags, not findings). */
-export const VIOLATION_LABELS: Readonly<Record<ViolationType, string>> = {
-  fullscreen_exit: 'Left fullscreen',
-  tab_switch_or_blur: 'Switched tab or window',
-  copy_paste: 'Copy or paste',
-  refresh_attempt: 'Page refresh',
-  inactivity: 'No activity',
-  no_face: 'No face in view',
-  multiple_faces: 'More than one person in view',
-  phone_detected: 'Phone in view',
-  book_or_notes: 'Book in view',
-  gaze_away_sustained: 'Looking away for a while',
-  speech_detected: 'Speech',
-  multiple_voices: 'More than one voice (low confidence)',
-};
 
 export interface ReportEvidence extends EvidenceRef {
   uploaded: boolean;
@@ -113,12 +98,6 @@ export async function buildReport(
   };
 }
 
-const BAND_LABEL: Record<RiskBand, string> = {
-  low: 'Low risk',
-  medium: 'Medium risk',
-  high: 'High risk',
-};
-
 function time(ms: number): string {
   return new Date(ms)
     .toISOString()
@@ -149,7 +128,7 @@ export function renderReportPdf(report: SessionReport): Promise<Buffer> {
     doc.moveDown();
     doc
       .fontSize(14)
-      .text(`Risk score ${report.risk.toFixed(1)} / 100 — ${BAND_LABEL[report.band]}`);
+      .text(`Risk score ${report.risk.toFixed(1)} / 100 — ${BAND_LABELS[report.band]}`);
     doc.fontSize(10).text('Flagged moments are for human review; this report is advisory.');
     doc.moveDown();
 

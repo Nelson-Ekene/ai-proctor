@@ -7,6 +7,6 @@
     "types": ["node", "chrome"],
     "allowImportingTsExtensions": true
   },
-  "include": ["*.ts", "tests/**/*.ts"],
+  "include": ["*.ts", "tests/**/*.ts", "dashboard/**/*.ts"],
   "references": [{ "path": "../packages/core" }]
 }

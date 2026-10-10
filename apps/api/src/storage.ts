@@ -14,6 +14,7 @@ export interface EvidenceStorage {
   ensureBucket(): Promise<void>;
   /** Stores an object encrypted at rest (SSE). */
   put(key: string, body: Buffer, contentType: string): Promise<void>;
+  get(key: string): Promise<Buffer>;
   remove(keys: readonly string[]): Promise<void>;
   signedUrl(key: string, ttlSeconds: number): Promise<string>;
   /** Server-side encryption reported for a stored object (tests and diagnostics). */
@@ -61,6 +62,11 @@ export function createS3Storage(o: S3Options): EvidenceStorage {
           ServerSideEncryption: 'AES256',
         }),
       );
+    },
+    async get(key) {
+      const res = await s3.send(new GetObjectCommand({ Bucket, Key: key }));
+      if (!res.Body) throw new Error(`evidence object ${key} has no body`);
+      return Buffer.from(await res.Body.transformToByteArray());
     },
     async remove(keys) {
       // DeleteObjects takes at most 1000 keys per call.

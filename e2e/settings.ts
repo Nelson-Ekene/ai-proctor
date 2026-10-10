@@ -14,3 +14,14 @@ export const HOST_PORT = Number(process.env.MOCK_HOST_PORT ?? 4400);
 export const API_PORT = Number(process.env.MOCK_API_PORT ?? 4401);
 export const HOST_URL = `http://localhost:${String(HOST_PORT)}`;
 export const API_URL = `http://localhost:${String(API_PORT)}`;
+
+/**
+ * Dashboard e2e (real API + dashboard dev server, see dashboard-setup.ts). Ports are separate
+ * from the mock server and from a manual `pnpm --filter @proctor/api dev` (4000) / dashboard (5173).
+ */
+export const DASHBOARD_API_PORT = Number(process.env.DASHBOARD_API_PORT ?? 4610);
+export const DASHBOARD_PORT = Number(process.env.DASHBOARD_PORT ?? 4611);
+export const DASHBOARD_API_URL = `http://localhost:${String(DASHBOARD_API_PORT)}`;
+export const DASHBOARD_URL = `http://localhost:${String(DASHBOARD_PORT)}`;
+/** Password of the seeded admin@proctor.test / reviewer@proctor.test accounts. */
+export const SEED_PASSWORD = 'e2e-dashboard-password';

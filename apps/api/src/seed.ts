@@ -2,10 +2,13 @@ import { eq } from 'drizzle-orm';
 import { loadConfig } from './config';
 import { connect, runMigrations } from './db/client';
 import { apiKeys, organisations, users } from './db/schema';
+import { seedDemoSessions } from './demo';
 import { hashPassword, hashToken, newToken } from './security';
+import { createS3Storage } from './storage';
 
 // Development seed: one organisation with an admin, a reviewer and an integrator API key.
 // `pnpm --filter @proctor/api seed`. Prints the secrets once; safe to re-run (skips existing users).
+// `--demo` also adds demo sessions with synthetic evidence for the dashboard.
 
 const ADMIN = 'admin@proctor.test';
 const REVIEWER = 'reviewer@proctor.test';
@@ -38,6 +41,19 @@ try {
   await db.insert(apiKeys).values({ organisationId, label: 'seed', keyHash: hashToken(key) });
   console.log(`organisation: ${organisationId}`);
   console.log(`integrator API key (shown once): ${key}`);
+
+  if (process.argv.includes('--demo')) {
+    const storage = createS3Storage({
+      endpoint: config.S3_ENDPOINT,
+      region: config.S3_REGION,
+      bucket: config.S3_BUCKET,
+      accessKeyId: config.S3_ACCESS_KEY,
+      secretAccessKey: config.S3_SECRET_KEY,
+    });
+    await storage.ensureBucket();
+    const seeded = await seedDemoSessions(db, storage, organisationId, new Date());
+    for (const s of seeded) console.log(`demo session ${s.candidateRef}: ${s.id}`);
+  }
 } finally {
   await database.close();
 }

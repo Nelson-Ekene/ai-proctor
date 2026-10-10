@@ -9,11 +9,12 @@
   "scripts": {
     "test": "vitest run --coverage",
     "test:watch": "vitest",
-    "test:e2e": "pnpm --filter @proctor/sdk build && pnpm --filter @proctor/extension build && pnpm --filter @proctor/e2e test",
+    "test:e2e": "pnpm --filter @proctor/sdk build && pnpm --filter @proctor/extension build && pnpm --filter @proctor/e2e test && pnpm --filter @proctor/e2e test:dashboard",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
     "typecheck": "tsc -b",
-    "clean": "tsc -b --clean"
+    "clean": "tsc -b --clean",
+    "test:e2e:dashboard": "pnpm --filter @proctor/e2e test:dashboard"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -187,7 +187,35 @@ Callers and their credentials:
   (`GET/PUT /v1/policies`, `DELETE /v1/policies/exams/:examId`).
 
 Integration tests (`pnpm test`) start their own Postgres and MinIO containers with
-testcontainers, so Docker must be running. The e2e suite still uses the mock API.
+testcontainers, so Docker must be running. The extension e2e suite still uses the mock API.
+
+## Dashboard (Phase 8)
+
+React + Vite + TanStack Query + Tailwind, for reviewers and admins. With the backend running
+(previous section), seed demo sessions and start the dashboard:
+
+```sh
+pnpm --filter @proctor/api seed -- --demo   # adds 4 demo sessions with synthetic evidence
+pnpm --filter @proctor/dashboard dev        # http://localhost:5173 (proxies /v1 to :4000)
+```
+
+Sign in as `reviewer@proctor.test` or `admin@proctor.test` (password printed by the seed).
+
+- **Sessions**: ranked by risk with Low / Medium / High risk badges; filter by band, status, exam
+  (filters live in the URL).
+- **Report**: score and band, the per-category contribution table (points → score capped at
+  100 → × weight → contribution), a timeline, and the flagged moments (time, type, category,
+  severity, confidence, count, points). Selecting a moment shows how its points were computed
+  and its evidence: webcam frames and audio clips via 60 s signed URLs, and the browser event
+  window (type + time only). Export PDF/JSON; the policy used is shown on every report.
+- **Policy** (admins edit, reviewers read): weights in percent (must total 100), bands, severity
+  points and per-type severity, sampling, windows, detection thresholds and retention, for the
+  organisation default or an exam override. "Preview score impact" re-scores a sample session
+  with core `computeRisk` before saving a new version.
+
+Every evidence view and export is audit-logged by the API. Tests: `pnpm test` (unit, component
+and UI language audit, jsdom) and `pnpm test:e2e:dashboard` (Playwright against the real API,
+Postgres and MinIO in containers, seeded demo data; Docker required).
 
 ## Release checklist
 

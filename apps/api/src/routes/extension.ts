@@ -2,7 +2,6 @@ import {
   AnomalySchema,
   ConsentRecordSchema,
   EndSessionSchema,
-  EventSequenceSchema,
   type SessionInfo,
 } from '@proctor/core';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -11,11 +10,12 @@ import { z } from 'zod';
 import type { AppDeps } from '../app';
 import { audit } from '../audit';
 import { requireApiKey, requireSessionToken } from '../auth';
-import { consents, evidence, exams, idempotencyKeys, sessions } from '../db/schema';
-import { badRequest, conflict, notFound, parse } from '../errors';
+import { consents, exams, idempotencyKeys, sessions } from '../db/schema';
+import { notFound, parse } from '../errors';
+import { storeEvidence } from '../evidence';
 import { ingestAnomaly } from '../ingest';
 import { effectivePolicy } from '../policies';
-import { hashToken, newStorageKey, newToken } from '../security';
+import { hashToken, newToken } from '../security';
 
 // Integrator and extension routes (BUILD_PLAN 5.5). The extension's uploader retries with the
 // same Idempotency-Key, so every write here counts exactly once.
@@ -28,13 +28,6 @@ const StartSessionSchema = z.strictObject({
 const SessionParams = z.object({ id: z.string().min(1) });
 const EvidenceParams = z.object({ id: z.string().min(1), evidenceId: z.string().min(1).max(200) });
 
-/** Content type each evidence kind must be uploaded with. */
-const CONTENT_TYPE = {
-  frame: 'image/jpeg',
-  audio: 'audio/wav',
-  event_sequence: 'application/json',
-};
-
 function baseType(req: FastifyRequest): string {
   return (req.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
 }
@@ -42,29 +35,6 @@ function baseType(req: FastifyRequest): string {
 function idempotencyKey(req: FastifyRequest): string | undefined {
   const key = req.headers['idempotency-key'];
   return typeof key === 'string' && key.length > 0 && key.length <= 200 ? key : undefined;
-}
-
-function isJpeg(b: Buffer): boolean {
-  return b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
-}
-
-function isWav(b: Buffer): boolean {
-  return (
-    b.length > 44 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WAVE'
-  );
-}
-
-/** Checks an evidence body is what its manifest says (data minimisation: nothing else). */
-function evidenceBody(kind: keyof typeof CONTENT_TYPE, body: unknown): Buffer {
-  if (kind === 'event_sequence') {
-    const sequence = parse(EventSequenceSchema, body);
-    return Buffer.from(JSON.stringify(sequence));
-  }
-  if (!Buffer.isBuffer(body)) throw badRequest('evidence body missing');
-  if (kind === 'frame' ? !isJpeg(body) : !isWav(body)) {
-    throw badRequest(`evidence is not a valid ${CONTENT_TYPE[kind]} file`);
-  }
-  return body;
 }
 
 export function registerExtensionRoutes(app: FastifyInstance, deps: AppDeps): void {
@@ -170,29 +140,14 @@ export function registerExtensionRoutes(app: FastifyInstance, deps: AppDeps): vo
     async (req, reply) => {
       const { id, evidenceId } = parse(EvidenceParams, req.params);
       const principal = await requireSessionToken(db, req, deps.now(), id);
-      const where = and(eq(evidence.sessionId, principal.sessionId), eq(evidence.id, evidenceId));
-      const [item] = await db.select().from(evidence).where(where);
-      // Evidence is accepted only when an anomaly manifest references it.
-      if (!item) throw conflict('evidence is not referenced by any anomaly of this session');
-      if (item.uploadedAt) return reply.status(200).send({ ok: true, duplicate: true });
-
-      const contentType = CONTENT_TYPE[item.kind];
-      if (baseType(req) !== contentType) {
-        throw badRequest(`${item.kind} evidence must be uploaded as ${contentType}`);
-      }
-      const body = evidenceBody(item.kind, req.body);
-      const storageKey = newStorageKey();
-      await storage.put(storageKey, body, contentType);
-      const updated = await db
-        .update(evidence)
-        .set({ storageKey, contentType, bytes: body.length, uploadedAt: deps.now() })
-        .where(and(where, isNull(evidence.uploadedAt)))
-        .returning({ id: evidence.id });
-      if (updated.length === 0) {
-        // A concurrent retry stored it first: keep theirs, remove ours.
-        await storage.remove([storageKey]);
-        return reply.status(200).send({ ok: true, duplicate: true });
-      }
+      const result = await storeEvidence(db, storage, {
+        sessionId: principal.sessionId,
+        evidenceId,
+        contentType: baseType(req),
+        body: req.body,
+        now: deps.now(),
+      });
+      if (result.duplicate) return reply.status(200).send({ ok: true, duplicate: true });
       return reply.status(201).send({ ok: true });
     },
   );
