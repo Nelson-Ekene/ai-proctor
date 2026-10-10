@@ -1,5 +1,18 @@
-import { RawBrowserEventSchema, type Policy, type SdkEventMessage } from '@proctor/core';
+import {
+  PendingAnomalySchema,
+  RawBrowserEventSchema,
+  type Policy,
+  type SdkEventMessage,
+} from '@proctor/core';
 import { z } from 'zod';
+
+/** Video sampling state recorded on the session (slow-device degradation, Phase 4). */
+export const VideoMetaSchema = z.strictObject({
+  degraded: z.boolean(),
+  framesPerWindow: z.number().int().positive(),
+  medianInferenceMs: z.number().nonnegative().optional(),
+});
+export type VideoMetaRecord = z.infer<typeof VideoMetaSchema>;
 
 // Messages inside the extension (pages, offscreen document, content script <-> service worker).
 
@@ -30,6 +43,12 @@ export const InternalRequestSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('setup:complete'), result: SetupResultSchema }),
   // offscreen document
   z.strictObject({ type: z.literal('media:state'), on: z.boolean() }),
+  z.strictObject({ type: z.literal('video:config') }),
+  z.strictObject({
+    type: z.literal('video:anomalies'),
+    anomalies: z.array(PendingAnomalySchema).min(1),
+  }),
+  z.strictObject({ type: z.literal('video:meta'), meta: VideoMetaSchema }),
   // content script
   z.strictObject({ type: z.literal('content:get') }),
   // Raw browser event for the rule engine. The event schema strips any field other than
@@ -50,6 +69,8 @@ export type InternalResponse =
   | {
       ok: true;
       policy?: Policy;
+      /** video:config: session the evidence belongs to. */
+      sessionId?: string;
       /** content:get: recording indicator on for this tab. */
       on?: boolean;
       /** content:get: browser monitoring active for this tab, with its ping interval. */

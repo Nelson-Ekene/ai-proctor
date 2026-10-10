@@ -35,6 +35,10 @@ export function createChromeDeps(config: ExtensionConfig): OrchestratorDeps {
     api: createApiClient(),
     now: () => Date.now(),
     log,
+    // Debug level: hidden by default in DevTools, captured by the e2e diagnostics log.
+    trace: (message) => {
+      console.debug(`[proctor] ${message}`);
+    },
 
     store: {
       // storage.session is memory-backed and only readable by trusted extension contexts.

@@ -712,6 +712,158 @@ describe('browser rule engine (phase 3)', () => {
   });
 });
 
+describe('video sampling messages (phase 4)', () => {
+  const offscreen: InternalSender = { kind: 'extension_page', tabId: undefined };
+  const phone = {
+    type: 'phone_detected',
+    ts: 5000,
+    confidence: 0.8,
+    evidence: [
+      { id: 'f1', kind: 'frame', ts: 5000 },
+      { id: 'f2', kind: 'frame', ts: 6000 },
+    ],
+  };
+
+  it('gives the offscreen document the policy and session id only while active', async () => {
+    const h = setup();
+    await h.orch.handleExternal(START, fromExam);
+    expect(await h.orch.handleInternal({ type: 'video:config' }, offscreen)).toEqual({
+      ok: false,
+      error: 'wrong_state',
+    });
+    await toActive(h);
+    expect(await h.orch.handleInternal({ type: 'video:config' }, offscreen)).toMatchObject({
+      ok: true,
+      sessionId: 's1',
+      policy: { sampling: { framesPerWindow: 5 } },
+    });
+  });
+
+  it('stores video anomalies together with their frame evidence', async () => {
+    const h = setup();
+    await toActive(h);
+    expect(
+      await h.orch.handleInternal({ type: 'video:anomalies', anomalies: [phone] }, offscreen),
+    ).toEqual({ ok: true });
+    expect(h.stored()?.anomalies).toEqual([phone]);
+  });
+
+  it('rejects non-video anomalies, other senders and inactive sessions', async () => {
+    const h = setup();
+    await toActive(h);
+    const browserType = { ...phone, type: 'copy_paste' };
+    expect(
+      await h.orch.handleInternal({ type: 'video:anomalies', anomalies: [browserType] }, offscreen),
+    ).toEqual({ ok: false, error: 'invalid_request' });
+    expect(
+      await h.orch.handleInternal({ type: 'video:anomalies', anomalies: [phone] }, content),
+    ).toEqual({ ok: false, error: 'not_allowed' });
+    expect(
+      await h.orch.handleInternal({ type: 'video:anomalies', anomalies: [] }, offscreen),
+    ).toEqual({ ok: false, error: 'invalid_request' });
+    await h.orch.handleExternal({ type: 'proctor:end' }, fromExam);
+    expect(
+      await h.orch.handleInternal({ type: 'video:anomalies', anomalies: [phone] }, offscreen),
+    ).toEqual({ ok: false, error: 'wrong_state' });
+    expect(h.stored()?.anomalies).toEqual([]);
+  });
+
+  it('records video sampling metadata (slow-device degradation)', async () => {
+    const h = setup();
+    const meta = { degraded: true, framesPerWindow: 3, medianInferenceMs: 400 };
+    await h.orch.handleExternal(START, fromExam);
+    expect(await h.orch.handleInternal({ type: 'video:meta', meta }, offscreen)).toEqual({
+      ok: false,
+      error: 'wrong_state',
+    });
+    await toActive(h);
+    await h.orch.handleInternal({ type: 'video:meta', meta }, offscreen);
+    expect(h.stored()?.videoMeta).toEqual(meta);
+  });
+});
+
+describe('a hung backend never blocks the session (stability-loop regression)', () => {
+  const never = () => new Promise<void>(() => undefined);
+
+  it('end tears down and notifies the page while the end upload is still pending', async () => {
+    const h = setup();
+    await toActive(h);
+    h.deps.api.postEnd = vi.fn(never);
+    h.calls.length = 0;
+    expect(await h.orch.handleExternal({ type: 'proctor:end' }, fromExam)).toMatchObject({
+      ok: true,
+    });
+    expect(h.calls).toEqual([
+      'capture.stop',
+      `monitor.stop:${String(EXAM_TAB)}`,
+      `indicator:false:${String(EXAM_TAB)}`,
+      `page:${String(EXAM_TAB)}:ended`,
+    ]);
+    expect(h.deps.api.postEnd).toHaveBeenCalled();
+    // The queue is free: other events are handled immediately.
+    expect(await h.orch.handleExternal({ type: 'proctor:status' }, fromExam)).toMatchObject({
+      status: 'ended',
+    });
+  });
+
+  it('decline notifies the page while the decline upload is still pending', async () => {
+    const h = setup();
+    await h.orch.handleExternal(START, fromExam);
+    h.deps.api.postConsent = vi.fn(never);
+    expect(
+      await h.orch.handleInternal(
+        { type: 'consent:decide', accepted: false, noticeVersion: 'v1' },
+        page,
+      ),
+    ).toEqual({ ok: true });
+    expect(h.calls).toContain(`page:${String(EXAM_TAB)}:consent_declined`);
+    expect(h.stored()?.session.status).toBe('consent_declined');
+  });
+
+  it('persists "ended" before teardown, so a stalled teardown cannot leave it active', async () => {
+    const h = setup();
+    await toActive(h);
+    h.deps.capture.stop.mockImplementation(never);
+    void h.orch.handleExternal({ type: 'proctor:end' }, fromExam);
+    await vi.waitFor(() => {
+      expect(h.stored()?.session.status).toBe('ended');
+    });
+  });
+
+  it('settled() waits for background uploads and logs their failures', async () => {
+    const h = setup();
+    const log = vi.fn();
+    (h.orch as unknown as { deps: OrchestratorDeps }).deps.log = log;
+    await toActive(h);
+    let release: () => void = () => undefined;
+    h.deps.api.postEnd = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          release = () => {
+            reject(new Error('offline'));
+          };
+        }),
+    );
+    await h.orch.handleExternal({ type: 'proctor:end' }, fromExam);
+    const settled = h.orch.settled();
+    release();
+    await settled;
+    expect(log).toHaveBeenCalledWith('end upload failed', expect.any(Error));
+  });
+
+  it('traces every queued task with its duration', async () => {
+    const h = setup();
+    const trace = vi.fn();
+    (h.orch as unknown as { deps: OrchestratorDeps }).deps.trace = trace;
+    await h.orch.handleExternal({ type: 'proctor:status' }, fromExam);
+    await h.orch.handleInternal(42, page);
+    const lines = trace.mock.calls.map(([m]) => String(m));
+    expect(lines).toContain('task external:proctor:status start');
+    expect(lines.some((l) => /^task external:proctor:status done in \d+ms$/.test(l))).toBe(true);
+    expect(lines).toContain('task internal:unknown start');
+  });
+});
+
 describe('rulesTickMinutes', () => {
   it('never goes below the Chrome alarm minimum and follows the inactivity threshold', () => {
     const policy = parsePolicy(DEFAULT_POLICY);

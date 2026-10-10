@@ -1,7 +1,9 @@
 import { readFile, readdir, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { prepareVideoFixtures } from './video-fixtures.ts';
 
+// Prepares the webcam fixtures (download once, verify, convert; see video-fixtures.ts).
 // Keeps artifacts of every failing run; prunes passing runs beyond the most recent few so
 // timestamped folders do not pile up (e.g. after a 20x stability loop).
 const KEEP_PASSING_RUNS = 5;
@@ -19,6 +21,11 @@ async function failed(reportDir: string): Promise<boolean> {
 }
 
 export default async function globalSetup(): Promise<void> {
+  await prepareVideoFixtures();
+  await prunePassingRuns();
+}
+
+async function prunePassingRuns(): Promise<void> {
   const reports = join(here, 'playwright-report');
   const results = join(here, 'test-results');
   let runs: { name: string; mtime: number }[];

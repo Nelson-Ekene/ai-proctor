@@ -19,6 +19,7 @@ import {
 } from '@proctor/core';
 import type { MockState } from './mock-server.ts';
 import { ACTION_TIMEOUT_MS, API_URL, HOST_URL, NAVIGATION_TIMEOUT_MS } from './settings.ts';
+import { videoFixturePath, type VideoFixtureName } from './video-fixtures.ts';
 
 /** Built extension under test. PW_EXTENSION_PATH lets the stability loop pin a snapshot. */
 const EXTENSION_PATH =
@@ -27,6 +28,8 @@ const EXTENSION_PATH =
 export { API_URL, HOST_URL };
 
 interface Fixtures {
+  /** Scene for the fake camera (see video-fixtures.ts); default: Chrome's test pattern. */
+  fakeVideo: VideoFixtureName | undefined;
   context: BrowserContext;
   serviceWorker: Worker;
   extensionId: string;
@@ -61,8 +64,8 @@ export const test = base.extend<Fixtures>({
   // Fresh profile per test, real Chromium with the built extension and fake media devices.
   // Playwright's trace/video/screenshot options only cover contexts it creates, so this
   // persistent context applies the same policies (playwright.config.ts) by hand.
-  // eslint-disable-next-line no-empty-pattern
-  context: async ({}, use, testInfo) => {
+  fakeVideo: [undefined, { option: true }],
+  context: async ({ fakeVideo }, use, testInfo) => {
     const log = new DiagnosticsLog();
     const context = await chromium.launchPersistentContext('', {
       channel: 'chromium',
@@ -71,6 +74,7 @@ export const test = base.extend<Fixtures>({
         `--load-extension=${EXTENSION_PATH}`,
         '--use-fake-device-for-media-stream',
         '--use-fake-ui-for-media-stream',
+        ...(fakeVideo ? [`--use-file-for-fake-video-capture=${videoFixturePath(fakeVideo)}`] : []),
       ],
       recordVideo: { dir: testInfo.outputPath('video') },
     });
@@ -191,7 +195,13 @@ export function storedStatus(sw: Worker): Promise<string | undefined> {
 
 export interface RulesData {
   log: { type: string; ts: number }[];
-  anomalies: { type: string; ts: number; confidence: number }[];
+  /** Pending anomalies; video ones carry their frame evidence. */
+  anomalies: {
+    type: string;
+    ts: number;
+    confidence: number;
+    evidence?: { id: string; kind: string; ts: number }[];
+  }[];
 }
 
 /** The browser rule engine's persisted rolling log and pending anomalies. */
@@ -233,13 +243,58 @@ export async function startActiveSession(
   return host;
 }
 
+export interface StoredFrameInfo {
+  id: string;
+  sessionId: string;
+  ts: number;
+  mime: string;
+  bytes: number;
+}
+
+/** Evidence frames the extension stored locally (IndexedDB, extension origin). */
+export function evidenceFrames(sw: Worker): Promise<StoredFrameInfo[]> {
+  return sw.evaluate(
+    () =>
+      new Promise<StoredFrameInfo[]>((resolve, reject) => {
+        const open = indexedDB.open('proctor-evidence');
+        open.onerror = () => {
+          reject(open.error ?? new Error('open failed'));
+        };
+        open.onsuccess = () => {
+          const db = open.result;
+          if (!db.objectStoreNames.contains('frames')) {
+            db.close();
+            resolve([]);
+            return;
+          }
+          const req = db.transaction('frames', 'readonly').objectStore('frames').getAll();
+          req.onsuccess = () => {
+            const rows = req.result as (Omit<StoredFrameInfo, 'bytes'> & { blob: Blob })[];
+            resolve(rows.map(({ blob, ...meta }) => ({ ...meta, bytes: blob.size })));
+            db.close();
+          };
+          req.onerror = () => {
+            reject(req.error ?? new Error('read failed'));
+          };
+        };
+      }),
+  );
+}
+
 /** Makes the next `count` consent uploads fail with 503. */
 export async function failNextConsents(count: number): Promise<void> {
   await fetch(`${API_URL}/__test/fail-consents?count=${String(count)}`, { method: 'POST' });
 }
 
-/** Accepts consent, runs the setup check and continues. Returns console warnings from setup. */
-export async function acceptAndCompleteSetup(consent: Page): Promise<string[]> {
+export interface SetupOutcome {
+  /** Console warnings/errors from the consent and setup pages. */
+  warnings: string[];
+  /** Setup check statuses as shown to the candidate ("Ready" / "Needs attention"). */
+  checks: Record<'face' | 'mic' | 'performance', string>;
+}
+
+/** Accepts consent, runs the setup check and continues. */
+export async function acceptAndCompleteSetup(consent: Page): Promise<SetupOutcome> {
   const warnings: string[] = [];
   consent.on('console', (msg) => {
     if (msg.type() === 'warning' || msg.type() === 'error') warnings.push(msg.text());
@@ -249,15 +304,16 @@ export async function acceptAndCompleteSetup(consent: Page): Promise<string[]> {
   await consent.waitForURL(/setup\.html/);
   await consent.click('#start-check');
   await expect(consent.locator('#continue')).toBeEnabled({ timeout: 30_000 });
-  for (const check of ['face', 'mic', 'performance']) {
-    await expect(consent.locator(`[data-check="${check}"]`)).toHaveText(
-      /^(Ready|Needs attention)$/,
-    );
+  const checks = { face: '', mic: '', performance: '' };
+  for (const check of ['face', 'mic', 'performance'] as const) {
+    const status = consent.locator(`[data-check="${check}"]`);
+    await expect(status).toHaveText(/^(Ready|Needs attention)$/);
+    checks[check] = (await status.textContent()) ?? '';
   }
   // The bundled MediaPipe model must load inside the extension (no remote fetch).
   await expect(consent.locator('main')).not.toContainText('The face check could not run');
   const closed = consent.waitForEvent('close');
   await consent.click('#continue');
   await closed;
-  return warnings;
+  return { warnings, checks };
 }

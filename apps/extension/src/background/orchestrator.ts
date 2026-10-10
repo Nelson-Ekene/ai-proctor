@@ -5,8 +5,9 @@ import {
   isTerminal,
   stepRuleEngine,
   transition,
+  categoryOf,
   type ConsentRecord,
-  type DetectedAnomaly,
+  type PendingAnomaly,
   type ExternalErrorCode,
   type ExternalResponse,
   type Policy,
@@ -22,6 +23,7 @@ import {
   NOTICE_VERSION,
   type InternalError,
   type InternalResponse,
+  type VideoMetaRecord,
 } from '../messages';
 import type { ApiClient } from './api-client';
 
@@ -36,7 +38,9 @@ export interface StoredSession {
   /** Browser rule engine state, including the rolling type+timestamp log (Phase 3). */
   rules?: RuleEngineState;
   /** Anomalies detected but not yet packaged/uploaded (Phase 6 drains this). */
-  anomalies?: DetectedAnomaly[];
+  anomalies?: PendingAnomaly[];
+  /** Webcam sampling state, e.g. reduced rate on a slow device (Phase 4). */
+  videoMeta?: VideoMetaRecord;
 }
 
 /** chrome.alarms cannot fire more often than every 30 s. */
@@ -77,6 +81,8 @@ export interface OrchestratorDeps {
   notifyPage(tabId: number, event: SdkEventName, sessionId: string): Promise<void>;
   now(): number;
   log?(message: string, error?: unknown): void;
+  /** Debug-level tracing of queue tasks and teardown steps (diagnostics). */
+  trace?(message: string): void;
 }
 
 export interface ExternalSender {
@@ -89,6 +95,12 @@ export interface InternalSender {
   tabId: number | undefined;
 }
 
+/** Message type for tracing only (the payload is validated later). */
+function requestType(raw: unknown): string {
+  const type = (raw as { type?: unknown } | null)?.type;
+  return typeof type === 'string' ? type : 'unknown';
+}
+
 const fail = (error: ExternalErrorCode): ExternalResponse => ({ ok: false, error });
 const internalFail = (error: InternalError): InternalResponse => ({ ok: false, error });
 
@@ -98,17 +110,57 @@ const internalFail = (error: InternalError): InternalResponse => ({ ok: false, e
  */
 export class Orchestrator {
   private queue: Promise<unknown> = Promise.resolve();
+  private readonly backgroundWork = new Set<Promise<void>>();
 
   constructor(private readonly deps: OrchestratorDeps) {}
 
-  private run<T>(task: () => Promise<T>): Promise<T> {
-    const result = this.queue.then(task, task);
+  /**
+   * Serialises a task. Each task is traced (start + duration) so a stalled step shows up in
+   * the worker console. Keep slow, best-effort network work out of here: see `background`.
+   */
+  private run<T>(name: string, task: () => Promise<T>): Promise<T> {
+    const traced = async () => {
+      const started = performance.now();
+      this.deps.trace?.(`task ${name} start`);
+      try {
+        return await task();
+      } finally {
+        this.deps.trace?.(`task ${name} done in ${(performance.now() - started).toFixed(0)}ms`);
+      }
+    };
+    const result = this.queue.then(traced, traced);
     this.queue = result.catch(() => undefined);
     return result;
   }
 
+  /**
+   * Best-effort work (e.g. uploading an end or decline record) that must not hold the queue:
+   * a slow backend would otherwise delay every other event, including "end".
+   */
+  private background(name: string, work: () => Promise<void>): void {
+    const job = work()
+      .catch((error: unknown) => this.deps.log?.(`${name} failed`, error))
+      .finally(() => this.backgroundWork.delete(job));
+    this.backgroundWork.add(job);
+  }
+
+  /** Resolves when all background work has finished (tests, shutdown). */
+  async settled(): Promise<void> {
+    await Promise.all([...this.backgroundWork]);
+  }
+
+  /** Runs one step of a multi-step task and traces its duration (pinpoints slow Chrome APIs). */
+  private async step<T>(label: string, work: () => Promise<T>): Promise<T> {
+    const started = performance.now();
+    try {
+      return await work();
+    } finally {
+      this.deps.trace?.(`${label} ${(performance.now() - started).toFixed(0)}ms`);
+    }
+  }
+
   handleExternal(raw: unknown, sender: ExternalSender): Promise<ExternalResponse> {
-    return this.run(async () => {
+    return this.run(`external:${requestType(raw)}`, async () => {
       const { config, store, api } = this.deps;
       if (sender.tabId === undefined || !isAllowedOrigin(sender.url, config.examOrigins)) {
         return fail('origin_not_allowed');
@@ -160,7 +212,7 @@ export class Orchestrator {
   }
 
   handleInternal(raw: unknown, sender: InternalSender): Promise<InternalResponse> {
-    return this.run(async () => {
+    return this.run(`internal:${requestType(raw)}`, async () => {
       const parsed = InternalRequestSchema.safeParse(raw);
       if (!parsed.success) return internalFail('invalid_request');
       const request = parsed.data;
@@ -211,12 +263,34 @@ export class Orchestrator {
 
         case 'media:state':
           return this.mediaChanged(stored, request.on);
+
+        case 'video:config':
+          return session.status === 'active'
+            ? { ok: true, policy: session.policy, sessionId: session.sessionId }
+            : internalFail('wrong_state');
+
+        case 'video:anomalies':
+          if (session.status !== 'active') return internalFail('wrong_state');
+          // The offscreen document may only report webcam findings.
+          if (request.anomalies.some((a) => categoryOf(a.type) !== 'video')) {
+            return internalFail('invalid_request');
+          }
+          await this.deps.store.set({
+            ...stored,
+            anomalies: [...(stored.anomalies ?? []), ...request.anomalies],
+          });
+          return { ok: true };
+
+        case 'video:meta':
+          if (session.status !== 'active') return internalFail('wrong_state');
+          await this.deps.store.set({ ...stored, videoMeta: request.meta });
+          return { ok: true };
       }
     });
   }
 
   handleTabRemoved(tabId: number): Promise<void> {
-    return this.run(async () => {
+    return this.run('tabRemoved', async () => {
       const stored = await this.deps.store.get();
       if (!stored || isTerminal(stored.session.status)) return;
       if (tabId === stored.session.examTabId) {
@@ -232,7 +306,7 @@ export class Orchestrator {
 
   /** chrome.tabs.onActivated: another tab in the exam window hides the exam tab. */
   handleTabActivated(tabId: number, windowId: number): Promise<void> {
-    return this.run(async () => {
+    return this.run('tabActivated', async () => {
       const stored = await this.monitored();
       if (!stored || windowId !== stored.examWindowId) return;
       await this.applyRuleEvent(stored, {
@@ -245,7 +319,7 @@ export class Orchestrator {
 
   /** chrome.windows.onFocusChanged: any window other than the exam's (or none) is a blur. */
   handleWindowFocus(windowId: number): Promise<void> {
-    return this.run(async () => {
+    return this.run('windowFocus', async () => {
       const stored = await this.monitored();
       if (!stored || stored.examWindowId === undefined) return;
       await this.applyRuleEvent(stored, {
@@ -257,7 +331,7 @@ export class Orchestrator {
 
   /** chrome.alarms fallback tick for the inactivity timer. */
   handleRulesTick(): Promise<void> {
-    return this.run(async () => {
+    return this.run('rulesTick', async () => {
       const stored = await this.monitored();
       if (stored) await this.applyRuleEvent(stored, { kind: 'tick', ts: this.deps.now() });
     });
@@ -318,21 +392,16 @@ export class Orchestrator {
 
   private async decline(stored: StoredSession, noticeVersion: string) {
     const { session } = stored;
-    // Declining always succeeds locally; recording it is best effort.
-    try {
-      await this.deps.api.postConsent(
-        session.apiBase,
-        session.sessionToken,
-        session.sessionId,
-        this.consentRecord('declined', noticeVersion),
-      );
-    } catch (error) {
-      this.deps.log?.('decline upload failed', error);
-    }
+    // Declining always succeeds locally and is applied first; recording it is best effort and
+    // happens outside the queue (Phase 6 routes it through the offline queue).
+    const record = this.consentRecord('declined', noticeVersion);
     const next = await this.save(stored, { type: 'consent_declined', ts: this.deps.now() });
     if (next.uiTabId !== undefined) await this.deps.tabs.close(next.uiTabId);
     await this.deps.tabs.focus(session.examTabId);
     await this.deps.notifyPage(session.examTabId, 'consent_declined', session.sessionId);
+    this.background('decline upload', () =>
+      this.deps.api.postConsent(session.apiBase, session.sessionToken, session.sessionId, record),
+    );
     return { ok: true } as const;
   }
 
@@ -344,7 +413,9 @@ export class Orchestrator {
     });
     const { uiTabId, ...rest } = stored;
     const { examTabId, policy } = activated;
-    const examWindowId = await this.deps.tabs.windowOf(examTabId);
+    const examWindowId = await this.step('setup: windowOf', () =>
+      this.deps.tabs.windowOf(examTabId),
+    );
     await this.deps.store.set({
       ...rest,
       session: activated,
@@ -352,15 +423,19 @@ export class Orchestrator {
       anomalies: [],
       ...(examWindowId === undefined ? {} : { examWindowId }),
     });
-    if (uiTabId !== undefined) await this.deps.tabs.close(uiTabId);
-    await this.deps.tabs.focus(examTabId);
-    await this.deps.monitor.start(
-      examTabId,
-      policy.inactivity.pingSeconds * 1000,
-      rulesTickMinutes(policy),
+    if (uiTabId !== undefined) {
+      await this.step('setup: ui.close', () => this.deps.tabs.close(uiTabId));
+    }
+    await this.step('setup: focus', () => this.deps.tabs.focus(examTabId));
+    await this.step('setup: monitor.start', () =>
+      this.deps.monitor.start(
+        examTabId,
+        policy.inactivity.pingSeconds * 1000,
+        rulesTickMinutes(policy),
+      ),
     );
     try {
-      await this.deps.capture.start();
+      await this.step('setup: capture.start', () => this.deps.capture.start());
     } catch (error) {
       this.deps.log?.('capture start failed', error);
       return internalFail('capture_failed');
@@ -390,18 +465,22 @@ export class Orchestrator {
 
   private async end(stored: StoredSession): Promise<void> {
     const { session } = stored;
-    await this.deps.capture.stop();
-    if (session.status === 'active') await this.deps.monitor.stop(session.examTabId);
+    const step = (name: string, work: () => Promise<void>) => this.step(`end: ${name}`, work);
+    // Persist "ended" first: from here on no media or rule event is accepted, even if a
+    // teardown call below is slow.
     const next = await this.save(stored, { type: 'end', ts: this.deps.now() });
-    await this.deps.indicator.show(false, session.examTabId);
-    if (next.uiTabId !== undefined) await this.deps.tabs.close(next.uiTabId);
-    try {
-      await this.deps.api.postEnd(session.apiBase, session.sessionToken, session.sessionId, {
-        ts: next.session.endedAt ?? this.deps.now(),
-      });
-    } catch (error) {
-      this.deps.log?.('end upload failed', error);
+    // Media off before the indicator goes off: the indicator never under-reports.
+    await step('capture.stop', () => this.deps.capture.stop());
+    if (session.status === 'active') {
+      await step('monitor.stop', () => this.deps.monitor.stop(session.examTabId));
     }
-    await this.deps.notifyPage(session.examTabId, 'ended', session.sessionId);
+    await step('indicator.off', () => this.deps.indicator.show(false, session.examTabId));
+    const { uiTabId } = next;
+    if (uiTabId !== undefined) await step('ui.close', () => this.deps.tabs.close(uiTabId));
+    await step('notify', () => this.deps.notifyPage(session.examTabId, 'ended', session.sessionId));
+    const ts = next.session.endedAt ?? this.deps.now();
+    this.background('end upload', () =>
+      this.deps.api.postEnd(session.apiBase, session.sessionToken, session.sessionId, { ts }),
+    );
   }
 }

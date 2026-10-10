@@ -5,6 +5,7 @@ coverage/
 apps/extension/public/vendor/
 test-results/
 playwright-report/
+e2e/.cache/
 *.tsbuildinfo
 .env
 .env.*

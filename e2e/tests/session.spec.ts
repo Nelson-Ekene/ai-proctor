@@ -29,7 +29,7 @@ test('host page starts a session; after consent and setup, capture runs with a v
   expect(await offscreenCount(serviceWorker)).toBe(0);
   expect(await badgeText(serviceWorker)).toBe('');
 
-  const warnings = await acceptAndCompleteSetup(consent);
+  const { warnings } = await acceptAndCompleteSetup(consent);
   expect(warnings.filter((w) => w.includes('face model unavailable'))).toEqual([]);
 
   await expect(host.locator('#events')).toContainText('ready');

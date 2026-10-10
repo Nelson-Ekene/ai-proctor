@@ -12,3 +12,4 @@ export * from './session';
 export * from './protocol';
 export * from './protocol-schemas';
 export * from './report-footer';
+export * from './video';

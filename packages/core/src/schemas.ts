@@ -28,6 +28,15 @@ export const DetectedAnomalySchema = z.strictObject({
 });
 export type DetectedAnomaly = z.infer<typeof DetectedAnomalySchema>;
 
+/**
+ * An anomaly held on the device before packaging (Phase 6). Video anomalies already reference
+ * their frames; browser anomalies get their event sequence when the capture window closes.
+ */
+export const PendingAnomalySchema = DetectedAnomalySchema.extend({
+  evidence: z.array(EvidenceRefSchema).optional(),
+});
+export type PendingAnomaly = z.infer<typeof PendingAnomalySchema>;
+
 /** An anomaly as uploaded: it always carries evidence. `id` doubles as the idempotency key. */
 export const AnomalySchema = DetectedAnomalySchema.extend({
   id,

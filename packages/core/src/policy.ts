@@ -60,7 +60,24 @@ export const PolicySchema = z.strictObject({
     .refine((i) => i.pingSeconds < i.seconds, {
       message: 'inactivity.pingSeconds must be shorter than inactivity.seconds',
     }),
-  gazeAway: z.strictObject({ sustainedSeconds: positive }),
+  gazeAway: z.strictObject({
+    sustainedSeconds: positive,
+    /** Head turned left/right beyond this many degrees counts as looking away. */
+    yawDegrees: z.number().positive().max(90),
+    /** Head tilted up/down beyond this many degrees counts as looking away. */
+    pitchDegrees: z.number().positive().max(90),
+  }),
+  /** On-device webcam analysis (Phase 4). */
+  video: z.strictObject({
+    /** Minimum model score (0-1) for a detection to count and for a video anomaly to be raised. */
+    minConfidence: z.number().min(0).max(1),
+    /** Median per-frame inference time above which sampling is reduced on this device. */
+    inferenceBudgetMs: positive,
+    /** Frames per window once the device is over budget. */
+    degradedFramesPerWindow: z.number().int().positive(),
+    /** Spacing of the extra burst frames captured after an anomalous frame. */
+    burstIntervalMs: positive,
+  }),
   retentionDays: z.number().int().positive(),
   /** Pre-test setup check (a readiness check for the candidate, never an exam result). */
   setupCheck: z.strictObject({
@@ -120,7 +137,14 @@ export const DEFAULT_POLICY: Policy = deepFreeze({
     countMultipliesPoints: false, // OPEN QUESTION: see README
   },
   inactivity: { seconds: 60, pingSeconds: 5 }, // ASSUMPTION: not specified in PRD
-  gazeAway: { sustainedSeconds: 5 }, // ASSUMPTION: not specified in PRD
+  // ASSUMPTION: none of the gaze/video numbers below are in the PRD; calibrate in the pilot.
+  gazeAway: { sustainedSeconds: 5, yawDegrees: 30, pitchDegrees: 25 },
+  video: {
+    minConfidence: 0.5,
+    inferenceBudgetMs: 250,
+    degradedFramesPerWindow: 3,
+    burstIntervalMs: 1000,
+  },
   retentionDays: 30, // ASSUMPTION: open question in PRD
   setupCheck: {
     // ASSUMPTION: none of these are in the PRD; calibrate in the pilot.

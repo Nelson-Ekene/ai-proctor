@@ -94,6 +94,30 @@ The rule engine from `packages/core` runs in the service worker; its state and r
 Anomalies are kept on the session for Phase 6 to package and upload. To try it by hand, open
 <http://localhost:4400/?token=tok-fastidle> (3 s inactivity) and follow the steps on the page.
 
+### Webcam sampling and on-device analysis (Phase 4)
+
+The offscreen document samples `sampling.framesPerWindow` frames per `sampling.windowSeconds`
+(5 per 30 s by default) at CSPRNG-chosen moments, one per slot, and runs three bundled
+MediaPipe models on each frame on the device:
+
+| Model                           | Used for                                                   |
+| ------------------------------- | ---------------------------------------------------------- |
+| BlazeFace short-range           | face count: `no_face`, `multiple_faces`                    |
+| EfficientDet-Lite0 (COCO)       | `phone_detected`, `book_or_notes`, additional `person`     |
+| Face Landmarker (+ pose matrix) | head yaw/pitch for `gaze_away_sustained` (head-pose proxy) |
+
+Rules live in `packages/core/src/video.ts`; every threshold is policy (`video.*`,
+`gazeAway.*`). A frame with no finding is closed without being encoded. A frame with a
+finding is stored as JPEG evidence (IndexedDB, extension origin) together with a burst of
+`capture.burstFrames` extra frames, and the anomaly is kept on the session with links to those
+frames for the Phase 6 upload queue. Nothing is uploaded yet. If inference is over
+`video.inferenceBudgetMs`, sampling drops to `video.degradedFramesPerWindow` and the session
+records `videoMeta.degraded`.
+
+e2e fixtures (`e2e/video-fixtures.ts`) are downloaded once at test time with pinned SHA-256
+hashes, letterboxed to 640×480 and played through Chrome's fake camera as MJPEG; nothing is
+committed. Use `?token=tok-fastvideo` on the mock host for one sample per second.
+
 ## Release checklist
 
 - [ ] **Fix the production extension ID**: use the Chrome Web Store ID, or pin a self-generated

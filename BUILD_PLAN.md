@@ -201,6 +201,7 @@ Content script feeds raw DOM events into the Phase 1 state machine; service work
 3. Queue size cap and priority (anomaly evidence before low-value events). On session end, flush.
 4. Route the best-effort consent decline record (Phase 2) through the offline queue so it eventually reaches the server.
 5. Use `chrome.alarms` for upload retry scheduling (survives service-worker restarts). If it turns out not to be needed, remove the `alarms` permission before release.
+6. Delete each evidence frame from the local IndexedDB store (`proctor-evidence`, written by Phase 4) once its upload is acknowledged, and purge local evidence of sessions that ended more than `retentionDays` ago or were abandoned, so nothing lingers on the candidate's device.
 
 **Done when:** an e2e test simulates network loss mid-session; all evidence arrives exactly once after reconnect.
 
@@ -280,11 +281,22 @@ False-positive marking to feed calibration; live monitoring; other browsers/mobi
 - **Setup check:** never blocks. Results are `ready` or `needs_attention`. Only camera and microphone permission gate progress.
 - **Tab lifecycle:** closing the exam tab ends the session and turns media off. A page refresh must NOT end the session.
 - **Open question (note only):** should hosts be able to resume a session after an accidental tab close?
+- **Best-effort uploads stay out of the serialised orchestrator queue** (end record, decline record). Local state and the host-page notification never wait on the network; "ended" is persisted before teardown. Every queued task and teardown step is traced at `console.debug`.
+- **Phase 4 video rules** (`packages/core/src/video.ts`, all thresholds in `policy.video` / `policy.gazeAway`):
+  - `no_face` confidence = 1 − best (sub-threshold) face score; `multiple_faces` confidence = second-best face or person score (an additional person the face model misses still counts).
+  - Gaze is a head-pose proxy (yaw/pitch from the Face Landmarker matrix); `gaze_away_sustained` needs consecutive away samples spanning `gazeAway.sustainedSeconds`, one anomaly per run.
+  - Slow devices: when the median inference time of the last window exceeds `video.inferenceBudgetMs`, sampling drops to `video.degradedFramesPerWindow` for the rest of the session (sticky, never below the normal rate) and is recorded as `videoMeta` on the session.
+  - Only anomalous frames plus `capture.burstFrames` extra frames (not analysed) are JPEG-encoded and stored (IndexedDB, extension origin) for the Phase 6 upload queue; every other frame is closed unencoded.
+- **Phase 4 e2e fixtures** are downloaded at test time (pinned SHA-256, never committed) from MediaPipe test assets, COCO val2017 and Wikimedia Commons (credits in `e2e/video-fixtures.ts`), chosen by running the bundled models over candidates.
 
 ## 12. Known gaps
 
-- The setup face check reports "needs attention" under Chrome's fake camera because the fake feed shows no face. Real face fixtures are part of Phase 4.
+- ~~The setup face check reports "needs attention" under Chrome's fake camera.~~ Resolved in Phase 4: with a real-face fixture the face check reports Ready (e2e test). Chrome's default fake feed (no face) still reports "needs attention", correctly.
 - There is no extension popup (only the badge and its title). Not required by the PRD.
 - CI has not yet run on a real GitHub remote: the local repo has no remote configured, so the Actions workflow is unverified.
 - Phase 3: if the candidate drags the exam tab into another window, window-focus signals keep using the original window id until the next session (tab visibility from the content script still works). Shown to reviewers as a documented limitation in the report footer (`REPORT_LIMITATIONS` in `packages/core/src/report-footer.ts`, rendered in Phase 8).
 - Phase 3: a refresh via keyboard shortcut produces two `refresh_attempt` anomalies (the key press and the completed reload); the merger collapses them into one violation.
+- Phase 3 follow-up: the e2e suite is sensitive to severe CPU starvation of the test machine (Chrome calls such as closing the offscreen document took 12–24 s while other heavy jobs ran in parallel). Stability loops must run on an otherwise idle machine; CI runs retry once and keep traces.
+- Phase 4: the Face Landmarker returns no pose for a face seen fully in profile, so an extreme head turn reads as "face present, direction unknown", not gaze away. Documented in `REPORT_LIMITATIONS`.
+- Phase 4: EfficientDet-Lite0 scores isolated books and shelves low (0.2–0.45 in our probes); a book held/read in front of the camera scores ~0.7. Loose paper notes are not a COCO class and are not detected. Documented in `REPORT_LIMITATIONS`.
+- Phase 4: no lighter model variant exists for the face landmarker/object detector in the bundle, so slow-device degradation lowers the sampling rate only.

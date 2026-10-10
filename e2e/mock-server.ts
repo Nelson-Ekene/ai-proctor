@@ -16,9 +16,11 @@ export interface MockState {
   sessionFetches: string[];
   consents: { sessionId: string; decision: string; noticeVersion: string; ts: number }[];
   ends: { sessionId: string; ts: number }[];
+  /** Every API request (method, path, body bytes), to prove what was and wasn't uploaded. */
+  requests: { method: string; path: string; bytes: number }[];
 }
 
-const state: MockState = { sessionFetches: [], consents: [], ends: [] };
+const state: MockState = { sessionFetches: [], consents: [], ends: [], requests: [] };
 /** Number of upcoming consent POSTs to fail with 503 (simulates an unreachable backend). */
 let failConsents = 0;
 
@@ -44,11 +46,24 @@ function sessionFor(req: IncomingMessage): string | undefined {
   return match ? `sess-${match[1] ?? ''}` : undefined;
 }
 
-/** "tok-fastidle" gets a 3 s inactivity threshold so tests (and humans) need not wait 60 s. */
+/**
+ * Test policies so tests (and humans) need not wait for production timings:
+ * - "tok-fastidle": 3 s inactivity threshold
+ * - "tok-fastvideo": one webcam sample per second, 2 s sustained gaze, quick bursts
+ */
 function policyFor(sessionId: string): Policy {
-  return sessionId === 'sess-fastidle'
-    ? { ...DEFAULT_POLICY, inactivity: { seconds: 3, pingSeconds: 0.5 } }
-    : DEFAULT_POLICY;
+  if (sessionId === 'sess-fastidle') {
+    return { ...DEFAULT_POLICY, inactivity: { seconds: 3, pingSeconds: 0.5 } };
+  }
+  if (sessionId === 'sess-fastvideo') {
+    return {
+      ...DEFAULT_POLICY,
+      sampling: { framesPerWindow: 5, windowSeconds: 5 },
+      gazeAway: { ...DEFAULT_POLICY.gazeAway, sustainedSeconds: 2 },
+      video: { ...DEFAULT_POLICY.video, burstIntervalMs: 300 },
+    };
+  }
+  return DEFAULT_POLICY;
 }
 
 const HOST_PAGE = `<!doctype html>
@@ -142,6 +157,7 @@ async function handleApi(req: IncomingMessage, url: URL): Promise<Reply> {
     state.sessionFetches.length = 0;
     state.consents.length = 0;
     state.ends.length = 0;
+    state.requests.length = 0;
     failConsents = 0;
     return { status: 204 };
   }
@@ -150,6 +166,11 @@ async function handleApi(req: IncomingMessage, url: URL): Promise<Reply> {
     return { status: 204 };
   }
 
+  state.requests.push({
+    method: req.method ?? 'GET',
+    path,
+    bytes: Number(req.headers['content-length'] ?? 0),
+  });
   const sessionId = sessionFor(req);
   if (!sessionId) return { status: 401, body: { error: 'unauthorised' } };
 

@@ -16,6 +16,18 @@ const MODELS = [
     url: 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite',
     sha256: 'b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f',
   },
+  {
+    // COCO object detector: "person", "cell phone", "book" among its 80 labels.
+    file: 'efficientdet_lite0.tflite',
+    url: 'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite',
+    sha256: '4b59100025bea1235a84c1038879a6cccc9f6c49f5e41144e91e74d99e780993',
+  },
+  {
+    // Face landmarks + facial transformation matrix (head pose for the gaze-away proxy).
+    file: 'face_landmarker.task',
+    url: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+    sha256: '64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff',
+  },
 ];
 
 // SIMD and non-SIMD builds; FilesetResolver picks one at runtime.

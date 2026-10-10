@@ -139,6 +139,21 @@ describe('policy validation', () => {
     });
   });
 
+  it('validates the video and gaze sections', () => {
+    expect(PolicySchema.safeParse(patched('video', 'minConfidence', 1.1)).success).toBe(false);
+    expect(PolicySchema.safeParse(patched('video', 'burstIntervalMs', 0)).success).toBe(false);
+    expect(PolicySchema.safeParse(patched('gazeAway', 'yawDegrees', 91)).success).toBe(false);
+    expect(PolicySchema.safeParse(patched('video', 'degradedFramesPerWindow', 1.5)).success).toBe(
+      false,
+    );
+    expect(DEFAULT_POLICY.video).toEqual({
+      minConfidence: 0.5,
+      inferenceBudgetMs: 250,
+      degradedFramesPerWindow: 3,
+      burstIntervalMs: 1000,
+    });
+  });
+
   it('allows burstFrames = 0 (burst disabled)', () => {
     expect(PolicySchema.safeParse(patched('capture', 'burstFrames', 0)).success).toBe(true);
   });

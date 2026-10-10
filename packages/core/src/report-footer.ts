@@ -7,4 +7,6 @@ export const REPORT_LIMITATIONS: readonly string[] = Object.freeze([
   'A second device or screen is out of scope in v1 and is not detected.',
   'If the exam tab is dragged into another browser window, window focus changes in that new window are not detected; switching away from the tab is still detected.',
   'Webcam frames are sampled at random moments, so short events between samples can be missed.',
+  'Gaze is estimated from head direction, not eye movement; a face seen fully in profile has no measurable direction.',
+  'Books are detected by an on-device object model; loose paper notes are not reliably detected.',
 ]);
