@@ -4,8 +4,8 @@
     "api": {
       "root": "apps/api/",
       "framework": "fastify",
-      "entrypoint": "src/server.ts",
-      "buildCommand": "pnpm migrate"
+      "entrypoint": "dist/server.mjs",
+      "buildCommand": "pnpm migrate && pnpm build"
     },
     "dashboard": {
       "root": "apps/dashboard/",

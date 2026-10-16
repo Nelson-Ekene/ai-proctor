@@ -17,6 +17,8 @@ are not deployed. The extension is published to the Chrome Web Store.
 The API notices it is on Vercel (the `VERCEL` variable) and switches to `SERVERLESS` mode:
 
 - **Migrations** run at build time (`pnpm migrate`, the API service's build command), not on start.
+- **The API is bundled** into one file (`pnpm build` → `apps/api/dist/server.mjs`), because Vercel
+  runs the compiled code with plain Node, which can't resolve the source's extensionless imports.
 - **Retention** (deleting expired sessions) has no timer, and **no schedule is set up yet**, so
   expired data is not deleted automatically on Vercel. See [Retention](#retention) below.
 - **Uploads** are capped at 4 MB (`MAX_EVIDENCE_BYTES`), under Vercel's 4.5 MB request limit.

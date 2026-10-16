@@ -23,6 +23,7 @@
     "@testcontainers/postgresql": "^12.2.0",
     "@types/pdfkit": "^0.17.6",
     "drizzle-kit": "^0.31.11",
+    "esbuild": "^0.28.2",
     "testcontainers": "^12.2.0",
     "tsx": "^4.23.15"
   },
@@ -31,6 +32,7 @@
     "start": "node --env-file-if-exists=.env --import tsx src/server.ts",
     "seed": "node --env-file-if-exists=.env --import tsx src/seed.ts",
     "migrate": "node --env-file-if-exists=.env --import tsx src/migrate.ts",
+    "build": "node scripts/bundle.mjs",
     "db:generate": "drizzle-kit generate"
   }
 }
