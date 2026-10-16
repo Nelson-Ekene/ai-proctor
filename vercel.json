@@ -4,7 +4,7 @@
     "api": {
       "root": "apps/api/",
       "framework": "fastify",
-      "entrypoint": "dist/server.mjs",
+      "entrypoint": "vercel-entry.mjs",
       "buildCommand": "pnpm migrate && pnpm build"
     },
     "dashboard": {
