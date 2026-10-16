@@ -1,254 +1,160 @@
-# AI Proctoring Extension
+# Hawkeye
 
-Advisory proctoring for online exams: a Chrome MV3 extension samples signals, a backend
-produces an explainable risk score, and human reviewers decide. See `docs/PRD.pdf`,
-`BUILD_PLAN.md` and `CLAUDE.md`.
+_See what matters._
 
-## Layout
+Hawkeye is the product name. Internal identifiers keep the original `proctor` naming
+(`@proctor/*` packages, `PROCTOR_*` variables, the `ai-proctor` Docker Compose project) so
+existing builds, environments and databases keep working.
 
+Advisory proctoring for online exams. A Chrome extension watches for signs of possible
+misconduct during an exam, a backend turns what it finds into an explainable **risk score**,
+and a dashboard lets **human reviewers** look at the evidence and decide.
+
+> **The system never passes, fails, blocks or disqualifies anyone.** It only flags moments for a
+> person to review.
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph Candidate's computer
+        Exam[Exam website<br/>+ Proctor SDK] -->|start session| Ext[Chrome extension]
+        Ext --- Cam[Camera + mic<br/>analysed on the device]
+        Ext --- Tab[Browser events<br/>type + time only]
+    end
+    Ext -->|flagged moments<br/>+ evidence| API[Backend API]
+    API --> DB[(Postgres)]
+    API --> S3[(Evidence storage)]
+    Reviewer[Reviewer dashboard] -->|reports, evidence| API
 ```
-packages/core       pure logic (types, schemas, policy, scoring, sampler, merger, rule engine)
-packages/sdk        host-page SDK
-packages/ui         shared React components (optional)
-apps/extension      MV3 extension
-apps/api            Fastify backend
-apps/dashboard      React reviewer/admin dashboard
-infra/              docker-compose (Postgres, MinIO)
-e2e/                Playwright tests
-```
 
-## Getting started
+1. **The exam website starts a session.** The exam provider's server asks the backend for a
+   session, and the exam page passes the session token to the extension through the small
+   [SDK](packages/sdk).
+2. **The candidate agrees first.** The extension shows a consent notice that explains what is
+   monitored. If the candidate declines, nothing starts. A setup check then tests the camera,
+   microphone and device speed. It gives advice but never blocks the exam.
+3. **Monitoring happens on the candidate's device.**
+   - **Webcam:** a few frames at random moments (5 every 30 s by default) are checked by on-device
+     models for no face, more than one person, a phone, books or notes, and looking away for a
+     long time.
+   - **Microphone:** a voice detector listens on the device. Audio is saved only when someone
+     speaks, as a short clip.
+   - **Browser:** leaving fullscreen, switching tabs, copy/paste, refreshing and inactivity.
+     Only the event type and time are recorded, never URLs, page content or keystrokes.
+4. **Only flagged moments leave the device.** Each flagged moment is uploaded with its evidence:
+   the frames, the audio clip and the browser events around it. Uploads are queued and retried, so
+   they survive a lost connection or a browser restart.
+5. **The backend scores the session.** Repeated flags are merged into **violations**, and each
+   one is given points by severity and confidence. The browser, video and audio scores are then
+   combined with weights into a **risk score from 0 to 100 (Low / Medium / High)**. The score can
+   always be recomputed from the violations and the policy that was in force.
+6. **A reviewer decides.** The dashboard ranks sessions by risk. For each session it shows how the
+   score was calculated, a timeline, and the evidence for every flagged moment.
 
-Requires Node 24+, pnpm 10 and Docker.
+Every threshold, weight and sampling rate comes from an editable **policy**, set for the whole
+organisation or for one exam. Each session keeps a snapshot of the policy it was scored under.
+
+More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+### Privacy rules
+
+- No screen recording, and no full video or audio recording.
+- Media leaves the device only as sampled frames around a flagged moment, or short speech clips.
+- Browser events are stored as type + timestamp only.
+- No identification of people. An optional "same face as at the start" check exists. It is off
+  by default, needs a separate opt-in from the candidate, and keeps its data in memory on the
+  device only.
+- Every flagged moment links to its evidence, and every view of evidence is audit-logged.
+- Data is deleted automatically after the retention period.
+
+See [docs/PRIVACY_REVIEW.md](docs/PRIVACY_REVIEW.md) and [docs/privacy-policy.md](docs/privacy-policy.md).
+
+## Quick start: try the whole thing
+
+You need **Node 24+**, **pnpm 10**, **Docker Desktop** (running) and **Google Chrome**.
 
 ```sh
 pnpm install
-pnpm test        # Vitest across all workspaces
-pnpm lint        # ESLint + Prettier check
-pnpm typecheck   # tsc -b over project references
-
-docker compose -f infra/docker-compose.yml up -d   # Postgres :5432, MinIO :9000 (console :9001)
+pnpm demo
 ```
 
-`minio-init` is a one-shot that creates the private `evidence` bucket and exits 0. Because of
-that, `up --wait` reports a non-zero exit; use `up -d --wait postgres minio` if you need to block
-until healthy, then `up minio-init`.
+`pnpm demo` starts the databases in Docker, sets up demo data, builds the extension, and runs:
 
-## Extension
+| What                     | Where                 |
+| ------------------------ | --------------------- |
+| Demo exam website        | http://localhost:4500 |
+| Reviewer dashboard       | http://localhost:5173 |
+| Backend API              | http://localhost:4000 |
+| MinIO console (evidence) | http://localhost:9001 |
+
+Then:
+
+1. **Install the extension (once).** In Chrome, open `chrome://extensions`, turn on
+   **Developer mode**, click **Load unpacked** and choose `apps/extension/build`.
+2. **Take an exam.** Open http://localhost:4500, click **Start exam**, accept the notice, allow
+   the camera and microphone, then try things like leaving fullscreen, switching tabs, holding up
+   a phone or talking. Click **Finish exam**.
+3. **Review it.** Open http://localhost:5173 and sign in as `reviewer@proctor.test` or
+   `admin@proctor.test` with the password `change-me-please`. Your session appears in the list
+   within a few seconds.
+
+Press **Ctrl+C** to stop the servers. To stop the databases, run
+`docker compose -f infra/docker-compose.yml down`. If you change the extension, run
+`pnpm demo --rebuild-extension` and click the reload icon on the extension's card in Chrome.
+
+> These logins and passwords are for local development only.
+
+## Developer setup
 
 ```sh
-pnpm --filter @proctor/extension build       # production build -> apps/extension/build
-pnpm --filter @proctor/extension build:dev   # adds a dev key: stable ID akponalihmmaihgcnonegjelddajfdka
-pnpm test:e2e                                # builds SDK + extension, runs Playwright (fake camera/mic)
+pnpm install
+pnpm test        # unit + integration tests (Docker must be running)
+pnpm lint        # ESLint + Prettier
+pnpm typecheck   # TypeScript
 ```
 
-Allowed origins are fixed at build time (no broad host access):
+Running parts on their own, end-to-end tests, build options and the release checklist are
+described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-| Variable               | Default                 | Used for                                               |
-| ---------------------- | ----------------------- | ------------------------------------------------------ |
-| `PROCTOR_EXAM_ORIGINS` | `http://localhost:4400` | content script, `externally_connectable`, sender check |
-| `PROCTOR_API_ORIGINS`  | `http://localhost:4401` | host permissions, `apiBase` allow-list                 |
+## Project layout
 
-Origins must be HTTPS (plain HTTP only for localhost). The build downloads the MediaPipe face
-model (SHA-256 pinned) into `public/vendor`; the extension never fetches models at runtime.
-
-**Manual try-out:** run `pnpm --filter @proctor/sdk build`, `pnpm --filter @proctor/extension build:dev`
-and `pnpm --filter @proctor/e2e mock`, load `apps/extension/build` as an unpacked extension in
-Chrome, and open <http://localhost:4400>.
-
-### Session flow
-
-`Proctor.start({ sessionToken, apiBase, extensionId })` → the extension resolves the token via
-`GET /v1/sessions/current` (session id + policy snapshot) → consent notice (generated from the policy) →
-`POST /v1/sessions/:id/consents` → setup check (camera, mic, face, device speed; `ready` or
-`needs_attention`, never a gate on the exam) → offscreen document opens camera + mic → badge
-`ON` + in-page indicator → SDK `ready`. Declining or closing the notice records `declined` and
-starts nothing. Ending, or closing the exam tab, closes the offscreen document.
-
-### e2e diagnostics
-
-- Each Playwright run writes to its own folder: `e2e/test-results/<run-id>` and
-  `e2e/playwright-report/<run-id>` (HTML + `results.json`). Failing runs are always kept; only
-  the five most recent passing runs are kept (pruned by `e2e/global-setup.ts`).
-- On failure: trace, screenshots of every open page, and video of every page. Locally traces
-  are `retain-on-failure` with no retries; in CI there is one retry, traced `on-first-retry`.
-- Every test attaches `extension-diagnostics.log`: service-worker console output and
-  start/termination, extension and exam page console output, navigations and uncaught errors.
-- Budgets: 60 s per test, 15 s per action, 20 s per navigation, 15 s per `expect`.
-- Stability loop: `pnpm --filter @proctor/e2e loop 20` runs the whole suite up to 20 times and
-  stops at the first failure (build the SDK and extension first).
-
-### Browser rule engine (Phase 3)
-
-The rule engine from `packages/core` runs in the service worker; its state and rolling log
-(type + timestamp only, `capture.logRetentionSeconds`, 60 s default) are kept in
-`chrome.storage.session`, so they survive worker restarts and page refreshes. Inputs:
-
-- **Content script** (`src/content/monitor.ts`): fullscreen, visibility, blur/focus (ignoring
-  focus moving into an iframe), copy/cut/paste, refresh shortcuts, completed reloads (Navigation
-  Timing), throttled activity pings and ticks every `inactivity.pingSeconds`. It sends only
-  `{kind, ts}`; key values, clipboard data, URLs and page text are never read or sent.
-- **Service worker**: `chrome.tabs.onActivated`, `chrome.windows.onFocusChanged`, and a
-  `chrome.alarms` tick as the inactivity fallback for throttled background tabs.
-
-Anomalies are kept on the session for Phase 6 to package and upload. To try it by hand, open
-<http://localhost:4400/?token=tok-fastidle> (3 s inactivity) and follow the steps on the page.
-
-### Webcam sampling and on-device analysis (Phase 4)
-
-The offscreen document samples `sampling.framesPerWindow` frames per `sampling.windowSeconds`
-(5 per 30 s by default) at CSPRNG-chosen moments, one per slot, and runs three bundled
-MediaPipe models on each frame on the device:
-
-| Model                           | Used for                                                   |
-| ------------------------------- | ---------------------------------------------------------- |
-| BlazeFace short-range           | face count: `no_face`, `multiple_faces`                    |
-| EfficientDet-Lite0 (COCO)       | `phone_detected`, `book_or_notes`, additional `person`     |
-| Face Landmarker (+ pose matrix) | head yaw/pitch for `gaze_away_sustained` (head-pose proxy) |
-
-Rules live in `packages/core/src/video.ts`; every threshold is policy (`video.*`,
-`gazeAway.*`). A frame with no finding is closed without being encoded. A frame with a
-finding is stored as JPEG evidence (IndexedDB, extension origin) together with a burst of
-`capture.burstFrames` extra frames, and the anomaly is kept on the session with links to those
-frames for the Phase 6 upload queue. Nothing is uploaded yet. If inference is over
-`video.inferenceBudgetMs`, sampling drops to `video.degradedFramesPerWindow` and the session
-records `videoMeta.degraded`.
-
-e2e fixtures (`e2e/video-fixtures.ts`) are downloaded once at test time with pinned SHA-256
-hashes, letterboxed to 640×480 and played through Chrome's fake camera as MJPEG; nothing is
-committed. Use `?token=tok-fastvideo` on the mock host for one sample per second.
-
-### Microphone monitoring (Phase 5)
-
-In the same offscreen document, the microphone goes through an AudioWorklet (16 kHz, 32 ms
-frames) into Silero VAD (bundled ONNX model on onnxruntime-web, no runtime downloads):
-
-- While nobody speaks, audio exists only in a rolling in-memory buffer (`audio.bufferSeconds`,
-  10 s). Nothing is stored or uploaded.
-- When speech lasts `audio.minSpeechMs`, a clip is kept: the buffer plus audio until
-  `audio.silenceEndMs` of silence, never longer than `audio.maxClipSeconds` (30 s). After a
-  capped clip, nothing is recorded again until there is silence.
-- Each clip is stored as WAV evidence (IndexedDB, extension origin) and linked to
-  `speech_detected`, plus `multiple_voices` if the heuristic indicates it. The multiple-voice
-  check is a labelled low-confidence pitch heuristic behind the `MultiVoiceDetector` interface.
-
-Try it on the mock host with `?token=tok-fastaudio` (5 s clip cap). e2e fixtures: Silero's
-example speech file (pinned SHA-256) and generated silence, played through Chrome's fake
-microphone.
-
-### Evidence upload (Phase 6)
-
-Every anomaly opens a capture window (browser events −30 s/+15 s, a burst of frames, any
-overlapping speech clip). When the window closes, the anomaly record and its evidence go into a
-persistent upload queue (IndexedDB) in the service worker:
-
-- order: consent decision → anomalies by severity (record before its evidence) → end record;
-- retries with exponential backoff (`upload.*` policy), scheduled with `chrome.alarms`, so the
-  queue survives worker and browser restarts and drains on reconnect;
-- `Idempotency-Key` = item id on every request, so retries never double-count;
-- HTTPS only (http for localhost); local media deleted once acknowledged; a size cap evicts
-  whole low-value anomaly groups.
-
-API calls: `POST /v1/sessions/:id/anomalies`, `PUT /v1/sessions/:id/evidence/:evidenceId`,
-`POST /v1/sessions/:id/consents`, `POST /v1/sessions/:id/end`. The mock API can simulate a
-network outage or lost replies (`POST /__test/network?mode=down|up|drop-after&count=N`); use
-`?token=tok-fastupload` for short windows and quick retries.
-
-## Backend (Phase 7)
-
-Fastify + Postgres (Drizzle) + MinIO. Run it against the docker-compose services:
-
-```sh
-docker compose -f infra/docker-compose.yml up -d
-cp apps/api/.env.example apps/api/.env
-pnpm --filter @proctor/api seed   # prints an admin/reviewer login and an integrator API key
-pnpm --filter @proctor/api dev    # http://localhost:4000 (migrations run on start)
+```
+packages/core       pure logic: policy, scoring, sampling, merging, rules, schemas
+packages/sdk        script the exam website uses to start a session
+packages/ui         shared React components
+apps/extension      Chrome extension (Manifest V3)
+apps/api            backend: Fastify + Postgres + S3-compatible storage
+apps/dashboard      reviewer and admin dashboard (React)
+apps/demo-host      demo exam website, an example integration
+infra/              docker-compose for Postgres and MinIO
+e2e/                Playwright end-to-end tests
+scripts/            pnpm demo
+docs/               architecture, development, privacy, fairness, performance, store listing
 ```
 
-Callers and their credentials:
+## Tech stack
 
-| Caller           | Credential                                  | Can do                                           |
-| ---------------- | ------------------------------------------- | ------------------------------------------------ |
-| Integrator       | API key `pak_…` (admin creates/revokes)     | `POST /v1/sessions` (returns a session token)    |
-| Extension        | session token `pst_…` (12 h, one session)   | current/consents/anomalies/evidence/end routes   |
-| Reviewer / admin | login token `put_…` (8 h, `/v1/auth/login`) | sessions, reports, exports, evidence URLs        |
-| Admin only       | login token                                 | policies (PUT/DELETE), audit, exams, keys, users |
+TypeScript everywhere, pnpm workspaces, Vitest, Playwright, zod.
+**Extension:** Vite + CRXJS, MediaPipe Tasks Vision and Silero VAD (onnxruntime-web), all
+models bundled.
+**Backend:** Fastify, Postgres (Drizzle), MinIO / S3.
+**Dashboard:** React, Vite, TanStack Query, Tailwind.
 
-- Anomalies are stored once per id, merged into violations and re-scored with `packages/core`
-  under the session's own policy snapshot; `GET /v1/sessions/:id/report` recomputes the score
-  and reports `reproducible: true` when it equals the stored one.
-- Evidence is accepted only if an anomaly manifest lists it, must match its kind (JPEG, WAV, or
-  an event sequence of type + timestamp only), is stored with SSE under a random key, and is
-  read only through a 60 s signed URL (`GET /v1/sessions/:id/evidence/:evidenceId/url`).
-- Audit rows for every session list, report view/export, evidence URL, policy change, login and
-  admin action (`GET /v1/audit`). Retention deletes sessions and objects after the snapshot's
-  `retentionDays` (hourly) and audit-logs each deletion.
-- Policies are versioned: organisation default plus optional per-exam override
-  (`GET/PUT /v1/policies`, `DELETE /v1/policies/exams/:examId`).
+## Documentation
 
-Integration tests (`pnpm test`) start their own Postgres and MinIO containers with
-testcontainers, so Docker must be running. The extension e2e suite still uses the mock API.
+| Document                                    | What's in it                                            |
+| ------------------------------------------- | ------------------------------------------------------- |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md)     | how each part works, scoring, API, design decisions     |
+| [DEVELOPMENT.md](docs/DEVELOPMENT.md)       | running parts separately, tests, debugging, releasing   |
+| [PRIVACY_REVIEW.md](docs/PRIVACY_REVIEW.md) | each privacy requirement and the test that proves it    |
+| [FAIRNESS.md](docs/FAIRNESS.md)             | how detection holds up across lighting, cameras, people |
+| [PERFORMANCE.md](docs/PERFORMANCE.md)       | CPU, memory and upload budgets                          |
+| [STORE_LISTING.md](docs/STORE_LISTING.md)   | Chrome Web Store text and permission reasons            |
+| [privacy-policy.md](docs/privacy-policy.md) | privacy policy template                                 |
+| [BUILD_PLAN.md](BUILD_PLAN.md)              | build phases, contracts and open questions              |
 
-## Dashboard (Phase 8)
+## Status
 
-React + Vite + TanStack Query + Tailwind, for reviewers and admins. With the backend running
-(previous section), seed demo sessions and start the dashboard:
-
-```sh
-pnpm --filter @proctor/api seed -- --demo   # adds 4 demo sessions with synthetic evidence
-pnpm --filter @proctor/dashboard dev        # http://localhost:5173 (proxies /v1 to :4000)
-```
-
-Sign in as `reviewer@proctor.test` or `admin@proctor.test` (password printed by the seed).
-
-- **Sessions**: ranked by risk with Low / Medium / High risk badges; filter by band, status, exam
-  (filters live in the URL).
-- **Report**: score and band, the per-category contribution table (points → score capped at
-  100 → × weight → contribution), a timeline, and the flagged moments (time, type, category,
-  severity, confidence, count, points). Selecting a moment shows how its points were computed
-  and its evidence: webcam frames and audio clips via 60 s signed URLs, and the browser event
-  window (type + time only). Export PDF/JSON; the policy used is shown on every report.
-- **Policy** (admins edit, reviewers read): weights in percent (must total 100), bands, severity
-  points and per-type severity, sampling, windows, detection thresholds and retention, for the
-  organisation default or an exam override. "Preview score impact" re-scores a sample session
-  with core `computeRisk` before saving a new version.
-
-Every evidence view and export is audit-logged by the API. Tests: `pnpm test` (unit, component
-and UI language audit, jsdom) and `pnpm test:e2e:dashboard` (Playwright against the real API,
-Postgres and MinIO in containers, seeded demo data; Docker required).
-
-## Release checklist
-
-- [ ] **Fix the production extension ID**: use the Chrome Web Store ID, or pin a self-generated
-      key in the manifest. Export it from the SDK as the default `extensionId` so integrators
-      don't need to pass it (BUILD_PLAN section 11).
-- [ ] **Confirm `externally_connectable` origins**: build with the real `PROCTOR_EXAM_ORIGINS`
-      and check `build/manifest.json` lists only those exam origins (no wildcards, no
-      `<all_urls>`). `src/manifest.test.ts` guards the generator.
-- [ ] **Remove unused permissions**: `alarms` is reserved for Phase 6 upload retries; drop it if
-      Phase 6 does not use it. Re-check `tabs` and `offscreen` are still needed.
-- [ ] **Production storage encryption**: replace the dev `MINIO_KMS_SECRET_KEY` with a real KMS
-      (or the cloud provider's SSE) and set `S3_PUBLIC_ENDPOINT` for signed URLs.
-- [ ] **Verify CI**: the `check`, `e2e` and `infra` jobs pass on the release commit.
-
-## Open questions
-
-Tracked in BUILD_PLAN.md section 9. Decisions taken in code, all policy-configurable:
-
-- **Does a merged violation's count multiply its points?** The PRD merges repeats "into one
-  violation with a count" but does not say. Default: no (`merge.countMultipliesPoints = false`),
-  so one merged violation contributes once.
-- **Merge window** is anchored at the violation's first anomaly (60 s default), not chained, so
-  a behaviour repeated all session produces one violation per window rather than one in total.
-- **Band edges with fractional scores:** risk is rounded to 2 dp, then `<= lowMax` is Low and
-  `<= mediumMax` is Medium. 29.01 is Medium under the default 29/59 bands.
-- **Severity at scoring time** is read from the policy, not the stored violation, so the same
-  violations can be re-scored under a different policy ("preview score impact").
-- **Weights may be 0** (e.g. an exam without audio) but must sum to 1. `capture.burstFrames`
-  may be 0. All other policy numbers must be positive.
-- **Browser event log retention** is `capture.logRetentionSeconds` (60 s default), validated to
-  cover the full -30 s / +15 s capture window.
-- **Setup-check thresholds** (`setupCheck.*`: mic level 0.02, face in 50% of frames, 200 ms
-  inference budget, 3 s sample) are not in the PRD; calibrate in the pilot.
-- **Session-token endpoints** `GET /v1/sessions/current` and `POST /v1/sessions/:id/consents`
-  are now in BUILD_PLAN 5.5. Their schemas live in `packages/core/src/protocol-schemas.ts`.
+Pre-release: being prepared for a pilot. Progress and open questions are tracked in
+[BUILD_PLAN.md](BUILD_PLAN.md).
