@@ -19,3 +19,6 @@ build-diagnostics/
 
 # Private product spec - keep local, never push
 docs/PRD.pdf
+
+# Internal notes and credentials - keep local, never push
+internal/
