@@ -51,6 +51,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
   app.setNotFoundHandler((_req, reply) => reply.status(404).send({ error: 'not found' }));
 
+  // Security headers: the API serves JSON and files only, never pages to frame or sniff.
+  app.addHook('onRequest', async (req, reply) => {
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('referrer-policy', 'no-referrer');
+    reply.header('x-frame-options', 'DENY');
+    reply.header('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
+    reply.header('cache-control', 'no-store');
+    if (req.protocol === 'https') {
+      reply.header('strict-transport-security', 'max-age=31536000; includeSubDomains');
+    }
+  });
+
   app.get('/healthz', () => ({ ok: true }));
   registerExtensionRoutes(app, deps);
   registerDashboardRoutes(app, deps);

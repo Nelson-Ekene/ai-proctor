@@ -73,6 +73,14 @@ function EventSequenceView({ sessionId, item }: { sessionId: string; item: Repor
   );
 }
 
+/**
+ * A face_mismatch links the frame its face reference was taken from (Phase 11). It is the only
+ * frame from before the flagged moment.
+ */
+function isReferenceFrame(violation: ReportViolation, item: ReportEvidence): boolean {
+  return violation.type === 'face_mismatch' && item.kind === 'frame' && item.ts < violation.firstTs;
+}
+
 export function EvidenceViewer({
   sessionId,
   violation,
@@ -96,7 +104,9 @@ export function EvidenceViewer({
           .map((item) => (
             <li key={item.id}>
               <h4 className="mb-1 text-sm font-medium">
-                {EVIDENCE_KIND_LABELS[item.kind]}{' '}
+                {isReferenceFrame(violation, item)
+                  ? 'Reference frame from the start of the session'
+                  : EVIDENCE_KIND_LABELS[item.kind]}{' '}
                 <span className="font-normal text-slate-500">at {clock(item.ts)}</span>
               </h4>
               {!item.uploaded ? (

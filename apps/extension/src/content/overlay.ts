@@ -12,7 +12,7 @@ const STYLE = `
 @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
 `;
 
-export const INDICATOR_TEXT = 'Camera and microphone on · proctoring active';
+export const INDICATOR_TEXT = 'Camera and microphone on · Hawkeye active';
 
 export class RecordingIndicator {
   private host: HTMLElement | undefined;

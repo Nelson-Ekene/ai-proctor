@@ -11,7 +11,7 @@ const custom = parseExtensionConfig({
 describe('buildManifest', () => {
   it('externally_connectable lists exactly the configured exam origins', () => {
     expect(buildManifest(defaults, 'production').externally_connectable).toEqual({
-      matches: ['http://localhost:4400/*'],
+      matches: ['http://localhost:4400/*', 'http://localhost:4500/*', 'http://localhost:4620/*'],
     });
     expect(buildManifest(custom, 'production').externally_connectable).toEqual({
       matches: ['https://exam.example.com/*', 'https://exam2.example.com/*'],

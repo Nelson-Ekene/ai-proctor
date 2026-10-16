@@ -24,10 +24,10 @@ describe('parseOrigin', () => {
 });
 
 describe('parseExtensionConfig', () => {
-  it('defaults to the local mock host and API', () => {
+  it('defaults to local development origins only (mock, demo, full-stack e2e)', () => {
     expect(parseExtensionConfig({})).toEqual({
-      examOrigins: ['http://localhost:4400'],
-      apiOrigins: ['http://localhost:4401'],
+      examOrigins: ['http://localhost:4400', 'http://localhost:4500', 'http://localhost:4620'],
+      apiOrigins: ['http://localhost:4401', 'http://localhost:4000', 'http://localhost:4621'],
     });
   });
 

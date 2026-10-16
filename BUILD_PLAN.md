@@ -1,4 +1,4 @@
-# AI Proctoring Chrome Extension: Build Plan for Claude Code
+# Hawkeye (AI Proctoring Chrome Extension): Build Plan for Claude Code
 
 Source: `AI_Proctoring_Extension_PRD.pdf` (Oct 2, 2026). Keep the PRD in the repo at `docs/PRD.pdf`.
 
@@ -8,17 +8,18 @@ Source: `AI_Proctoring_Extension_PRD.pdf` (Oct 2, 2026). Keep the PRD in the rep
 
 ## 1. Product in one paragraph
 
-A Chrome (Manifest V3) extension samples webcam frames (5 random per 30 s), monitors audio on-device (clip saved only on anomaly), and logs browser events. Any anomaly becomes a **violation** (type, time, severity, confidence, evidence). A backend turns violations into a weighted **risk score (0-100, Low/Medium/High)**. A dashboard lets human reviewers see the score, timeline and evidence. **The system never passes, fails, blocks or disqualifies anyone.**
+A Chrome (Manifest V3) extension samples webcam frames (5 random per 30 s), monitors audio on-device (clip saved only on anomaly), and logs browser events. Optionally (Phase 11, off by default, separate candidate opt-in), it checks on the device that the face stays the same as at the start of the session. Any anomaly becomes a **violation** (type, time, severity, confidence, evidence). A backend turns violations into a weighted **risk score (0-100, Low/Medium/High)**. A dashboard lets human reviewers see the score, timeline and evidence. **The system never passes, fails, blocks or disqualifies anyone.**
 
 ## 2. CLAUDE.md (paste into repo root)
 
 ```markdown
-# Project: AI Proctoring Extension
+# Project: Hawkeye (AI proctoring extension)
 Read BUILD_PLAN.md and docs/PRD.pdf before starting any task.
 
 ## Hard rules
 - Advisory only. No pass/fail/disqualify/block/end-test state anywhere in code, UI copy, API or DB.
-- No face recognition, no biometric templates, no identity verification.
+- No face identification: never match a face against a database, a name or another person. The only face comparison allowed is optional face matching (Phase 11, BUILD_PLAN section 11): same face as at the start of the session.
+- Face matching runs only when the policy enables it (`faceMatch.enabled`, default off) AND the candidate ticks the separate opt-in on the consent notice. The reference template and embeddings exist only in the offscreen document's memory: never stored, sent to the service worker or uploaded. `face_mismatch` is a flag for review with the reference and flagged frames as evidence, never an identity decision.
 - No screen recording or capture of test content. No full video/audio recording.
 - Raw media leaves the device only as sampled frames or anomaly audio clips.
 - Browser events: store event type + timestamp only (no URLs, no page content, no keystrokes).
@@ -83,6 +84,8 @@ DEFAULT_POLICY = {
   merge: { windowSeconds: 60 },        // ASSUMPTION: PRD says "short span", pick 60 s, configurable
   inactivity: { seconds: 60 },         // ASSUMPTION: not specified in PRD
   gazeAway: { sustainedSeconds: 5 },   // ASSUMPTION: not specified in PRD
+  faceMatch: { enabled: false, enrolSamples: 5, enrolIntervalMs: 1000, enrolMaxSeconds: 30,
+               minSimilarity: 0.363, consecutiveSamples: 3 },  // Phase 11, not in PRD
   retentionDays: 30,                   // ASSUMPTION: open question in PRD
 }
 ```
@@ -101,6 +104,7 @@ DEFAULT_POLICY = {
 | phone_detected | video | high | model |
 | book_or_notes | video | medium | model |
 | gaze_away_sustained | video | low | model |
+| face_mismatch (Phase 11, optional; not in PRD) | video | medium | model |
 | speech_detected | audio | medium | model |
 | multiple_voices | audio | high | model |
 
@@ -131,6 +135,7 @@ Output shape: `{ risk, band, categories: [{category, weight, score, contribution
 - `PUT /v1/sessions/:id/evidence/:evidenceId` (session token): upload frame/clip (or presigned URL flow)
 - `POST /v1/sessions/:id/end`
 - `GET /v1/sessions` (ranked by risk), `GET /v1/sessions/:id/report`, `GET /v1/sessions/:id/report.pdf|json`
+- `DELETE /v1/sessions/:id` (admin): deletes the session, its data and evidence objects now, as retention would later; audit-logged
 - `GET/PUT /v1/policies`, `GET /v1/audit`
 - Every GET of a session/evidence/export and every policy change writes an `audit_log` row.
 
@@ -241,6 +246,18 @@ Content script feeds raw DOM events into the Phase 1 state machine; service work
 
 False-positive marking to feed calibration; live monitoring; other browsers/mobile; multi-monitor detection. Keep the interfaces ready but do not build.
 
+### Phase 11: Optional on-device face matching (not in the PRD)
+
+Added on request after Phase 9. Checks that the face at the camera stays the same as at the start of the session; it never identifies anyone.
+
+1. Policy `faceMatch` (off by default) and violation type `face_mismatch` (video, medium). Old policies and snapshots read as face matching off, so their scores are unchanged.
+2. Consent: when the policy enables it, the notice shows a separate section and an unticked opt-in; accepting without it records `consent-notice-v1`, with it `consent-notice-v1+face-match-v1`. Face matching runs only with both.
+3. Offscreen document: SFace embedding model (bundled, onnxruntime-web) on a crop aligned from the face detector's eye/nose/mouth keypoints. Reference from consistent single-face frames right after the camera starts; each sampled frame is then compared with it. Templates live in memory only.
+4. Evidence: the flagged frame (+ burst) and the reference frame. Reports state whether face matching was offered and opted in to.
+5. Harness: `e2e/fairness/face-match.spec.ts` on public-domain portraits under the fairness conditions.
+
+**Done when:** core rules 100% tested; privacy tests prove embeddings never leave the offscreen document; the harness separates same and different people on unmodified photos; docs (privacy policy, privacy review, store listing, fairness, performance) updated.
+
 ---
 
 ## 7. Release mapping (from PRD)
@@ -308,6 +325,7 @@ False-positive marking to feed calibration; live monitoring; other browsers/mobi
   - Reports recompute the score from stored violations + snapshot on every request and expose `reproducible`. JSON and PDF (pdfkit) exports.
   - Evidence needs a manifest entry, a matching content type and valid content (JPEG/WAV magic bytes; event sequences must match the strict `EventSequenceSchema` — type + timestamp only). Stored with SSE-S3 (`AES256`) under a random 24-byte key; reviewers get 60 s signed URLs after an audited check.
   - Retention runs hourly: sessions whose end (or start, if never ended) is older than the snapshot's `retentionDays` are deleted with their objects; each deletion is audit-logged and the audit trail is kept. If the objects cannot be deleted the session is kept and retried. Expired login tokens are purged too.
+  - Admins can delete a session on request (`DELETE /v1/sessions/:id`, "Delete session" on the report page with a second confirmation). It shares `deleteSession` with the retention job: evidence objects first, then the session row (cascading to all its data); if the objects cannot be deleted the session is kept. One `session.delete` audit row; the audit trail is kept. The session's token stops resolving, so a device still uploading is refused (401) and drops its queue.
   - Policies are append-only versions: organisation default and per-exam overrides; removing an override appends a null version (inherit). New sessions snapshot the effective policy.
   - API port defaults to 4000 (4400/4401 stay with the mock server).
 - **Phase 8 dashboard** (`apps/dashboard`):
@@ -319,6 +337,24 @@ False-positive marking to feed calibration; live monitoring; other browsers/mobi
   - "Preview score impact" re-scores the sample session's stored violations with core `computeRisk` under the draft policy. Merging is not redone: a new merge window only affects sessions that start under it.
   - Demo data (`seed --demo`, `apps/api/src/demo.ts`) goes through the real ingestion and evidence code; frames are drawn shapes (jpeg-js) and clips are tones, never real people. The first demo session is the PRD sample (49.0 Medium risk).
   - UI language audit: a test scans every dashboard source file (CSS class lists excluded) for verdict words.
+- **Phase 9 hardening and pilot readiness:**
+  - One-command local demo (`pnpm demo`, `scripts/demo.mjs`) and a demo exam website (`apps/demo-host`) that plays the integrator: its server holds the API key and creates sessions through `POST /v1/sessions`; the page starts the extension through the SDK. Development extension builds allow the mock (4400/4401), demo (4500/4000) and full-stack e2e (4620/4621) localhost origins; store builds must set real https origins.
+  - Full-stack e2e (`e2e/fullstack`): built extension + demo site + real API behind a recording proxy + Postgres/MinIO. The privacy spec checks every upload of a real exam (routes, content types, strict schemas, JPEG/WAV, no page text or URLs, every announced evidence item uploaded exactly as announced). The performance spec measures CPU (per Chrome process type, minus an idle baseline), JS heap of the offscreen document and service worker, and upload volume, with tracing off.
+  - Fairness harness (`e2e/fairness`) uses a diagnostics page built only with `PROCTOR_DIAGNOSTICS=1` to run the exact bundled models and `analyzeFrame` on fixtures under 13 conditions. Skin tone, glasses and disability-related movement are not measured (no consented labelled data); synthetic substitutes were deliberately not used. Findings added to `REPORT_LIMITATIONS`.
+  - Store packaging (`pnpm --filter @proctor/extension package`): production build into `build-release/`, release check (`src/release.ts`), dependency-free zip writer.
+  - Regions (`apps/api/src/regions.ts`, `organisations.region`): retention capped by region (policy PUT refused above the cap; retention job uses the lower of snapshot and cap); consent records for notice versions not valid in the region are refused with 422 (non-retryable, so capture never starts under the wrong notice). Default values are assumptions pending legal review.
+  - Metrics: the extension uploads the setup-check outcome (queue kind `setup`, priority 90, `POST /v1/sessions/:id/setup-check`, first record wins); the dashboard reports visible time on a report (`POST /v1/sessions/:id/review-time`, keepalive, capped at 4 h per visit); `GET /v1/metrics` (admin) computes evidence linkage, evidence received, setup completion and reviewer time (median/p90/mean per session).
+  - Hardening: in-memory login rate limiting per address + e-mail; security headers (nosniff, no-referrer, DENY, CSP `default-src 'none'`, no-store, HSTS over https).
+- **Phase 11 optional face matching** (`packages/core/src/face-match.ts`, `apps/extension/src/shared/face-embedder.ts`, all thresholds in `policy.faceMatch`):
+  - Reverses the original "no biometric templates" rule, narrowly: comparison with the same session's start only, never identification, opt-in per organisation (policy) and per candidate (separate unticked box). CLAUDE.md hard rules updated accordingly.
+  - Model: SFace fp32 (OpenCV Zoo, Apache-2.0, 128-d, LFW 99.4%), 38.7 MB, bundled like the other models. The int8 file is 4× smaller but ran ~6× slower in onnxruntime-web wasm (~1 s per face), so fp32 is used.
+  - Alignment: the face detector's eye, nose-tip and mouth-centre keypoints → least-squares similarity transform onto the SFace 5-point template (mouth corners averaged) → 112×112 RGB crop (core `alignFace`, pure and tested). Only the highest-scoring face is used, and only in frames with exactly one face ≥ `video.minConfidence`.
+  - Reference: `enrolSamples` consistent embeddings (each ≥ `minSimilarity` to the mean so far; an inconsistent one restarts) from extra frames at 1 per `enrolIntervalMs` for up to `enrolMaxSeconds` after start, then from regular samples. Extra frames are never stored. The frame completing the reference is held in memory and stored only as evidence next to a `face_mismatch`.
+  - `face_mismatch`: `consecutiveSamples` (3) sampled frames in a row below `minSimilarity` (0.363, SFace's published cosine threshold); one anomaly per run; a frame without exactly one confident face ends the run. Confidence = 1 − the highest similarity in the run.
+  - Embedding time is not counted in `video.inferenceBudgetMs` (detection models only); otherwise every face-matching session would degrade (~230 + 160 ms > 250 ms).
+  - Consent: notice version `consent-notice-v1+face-match-v1` (core `FACE_MATCH_NOTICE_VERSION`) records the opt-in; the orchestrator refuses it when the policy does not offer face matching. Accepted in every region by default (`regions.ts`, pending legal review).
+  - Reports carry `faceMatch` (`not_offered` / `not_opted_in` / `opted_in`) from the snapshot + accepted consent; the dashboard labels the reference frame in the evidence viewer.
+  - Policies stored before Phase 11 are upgraded on parse (face matching off, default `face_mismatch` severity), so stored scores reproduce exactly.
 
 ## 12. Known gaps
 
@@ -337,11 +373,19 @@ False-positive marking to feed calibration; live monitoring; other browsers/mobi
 - Phase 6: the session token is stored with queued items (IndexedDB, extension origin) so uploads can resume after a browser restart. Since Phase 7 tokens are short-lived (12 h) and valid only for their own session; they still cover the session routes, not uploads alone.
 - Phase 6: the "event sequence" for a window closing while the worker is asleep is packaged at the next wake-up (rule tick alarm, at most every 30 s); the snapshot keeps the "before" part complete.
 - Phase 7: session tokens live 12 h (`SESSION_TOKEN_TTL_MS`). A queue that drains later than that (e.g. a browser reopened the next day) gets 401 and drops its items. Consider an upload-only refresh or a longer upload-scoped lifetime in the pilot.
-- Phase 7: no login rate limiting or account lockout yet (Phase 9 hardening); no password reset flow.
-- Phase 7: the e2e suite still runs the extension against the mock API; the extension↔API contract is covered by API integration tests that send the exact packages core builds. Running the e2e suite against the real API is a Phase 9 item.
+- ~~Phase 7: no login rate limiting~~ Resolved in Phase 9 (in-memory; a multi-instance deployment needs a shared store). Still no password reset flow.
+- ~~Phase 7: no e2e against the real API~~ Resolved in Phase 9 (`e2e/fullstack`). The original extension suite still uses the mock API for its fault-injection scenarios (network loss, lost replies).
 - Phase 7: the server runs TypeScript through `tsx`; there is no compiled production build yet.
 - Phase 8: the dashboard has no admin screens for users, API keys, exams or the audit log yet (the API routes exist); exams are created via `POST /v1/exams`.
 - Phase 8: "preview score impact" uses one sample session at a time; no batch preview across many sessions.
-- Phase 8: reviewer time per session is not measured yet (Phase 9 metrics).
+- ~~Phase 8: reviewer time per session is not measured~~ Resolved in Phase 9 (visible time on the report page).
+- Phase 9: fairness across skin tones, glasses and disability-related movement is not measured (needs a consented, labelled dataset); see `docs/FAIRNESS.md`. Phone and book detection is fragile under poor lighting/cameras.
+- Phase 9: performance was measured on the development PC with fake devices; repeat on pilot laptops with real cameras (`docs/PERFORMANCE.md`).
+- Phase 9: region defaults (`apps/api/src/regions.ts`) and the privacy policy template need legal review per deployment.
+- Phase 9: the API server still runs TypeScript through `tsx`; `pnpm demo` is a development setup, not a production deployment.
 - Phase 5: the extension build is ~49 MB (MediaPipe wasm SIMD + non-SIMD ~23 MB, onnxruntime wasm 14 MB, models ~13 MB). Track in the Phase 9 performance budget (e.g. drop the non-SIMD MediaPipe build if all target Chrome versions have SIMD).
+- Phase 11: face matching collapses under overexposure and heavy sensor noise (the same photo scored ~0.0 similarity in the harness), so a candidate whose lighting changes badly mid-session can be flagged; mitigated only by `consecutiveSamples`, the medium severity and the reviewer comparing frames. Accuracy and fairness on real candidates (skin tone, age, glasses) are not measured: the harness has three people in studio portraits (`docs/FAIRNESS.md`).
+- Phase 11: whether the reference face was actually formed on the device is not sent to the server (the session's `videoMeta.faceMatch` stays local); a report says "opted in" but cannot tell "matched throughout" from "no reference taken".
+- Phase 11: the face-matching model adds 38.7 MB to every build, also for organisations that never enable it.
+- Phase 11: no e2e test of a full session with face matching through the fake camera (Chrome's fake camera plays one image per run, so a person change mid-session needs a multi-frame fixture); the pipeline is covered by the diagnostics harness and the sampler/orchestrator unit tests.
 - Phase 5 e2e: audio scenarios load four models before speech can be detected; under heavy CPU load (e.g. another Chrome running the extension with live models) model start-up takes tens of seconds, so tests time speech from `audioMeta.listening`, not from session start.

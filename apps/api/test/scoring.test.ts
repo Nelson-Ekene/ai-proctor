@@ -75,6 +75,10 @@ describe('anomaly ingestion: merge and scoring', () => {
       ['audio', 25, 5],
     ]);
     expect(r.reproducible).toBe(true);
+    // The plain-language explanation is built from the same numbers.
+    expect(r.explanation.summary[0]).toContain('scored 49.0 out of 100, in the Medium risk band');
+    expect(r.explanation.categories[0]).toContain('contributes 50.0 × 0.4 = 20.0 points');
+    expect(r.explanation.violations.map((e) => e.id)).toEqual(r.violations.map((v) => v.id));
   });
 
   it('merges anomalies of the same type within the merge window into one violation', async () => {

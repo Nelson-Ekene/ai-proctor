@@ -2,6 +2,7 @@ import type {
   CategoryResult,
   EventSequence,
   EvidenceRef,
+  FaceMatchStatus,
   Policy,
   RiskBand,
   Violation,
@@ -67,6 +68,8 @@ export interface SessionReport {
   categories: CategoryResult[];
   violations: ReportViolation[];
   policySnapshot: Policy;
+  /** Optional face matching (Phase 11); absent in reports from older API versions. */
+  faceMatch?: FaceMatchStatus;
   reproducible: boolean;
   limitations: string[];
   generatedAt: string;
@@ -93,6 +96,43 @@ export interface PolicyVersion {
   policy: Policy | null;
   createdBy: string | null;
   createdAt: string;
+}
+
+export interface Organisation {
+  id: string;
+  name: string;
+  region: 'eu' | 'uk' | 'us' | 'other';
+  regionConfig: { label: string; maxRetentionDays: number; consentNoticeVersions: string[] };
+}
+
+export interface Metrics {
+  since: string | null;
+  sessions: number;
+  violations: { total: number; withEvidence: number; evidenceLinkedRate: number | null };
+  evidence: { referenced: number; uploaded: number; uploadedRate: number | null };
+  setupCheck: {
+    consented: number;
+    completed: number;
+    completionRate: number | null;
+    allReady: number;
+  };
+  reviewerTime: {
+    reviewedSessions: number;
+    medianMs: number | null;
+    p90Ms: number | null;
+    meanMs: number | null;
+  };
+}
+
+export interface AuditEntry {
+  id: string;
+  actorType: 'user' | 'api_key' | 'session' | 'system';
+  actorId: string | null;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  details: Record<string, unknown> | null;
+  ts: string;
 }
 
 export interface PolicyView {

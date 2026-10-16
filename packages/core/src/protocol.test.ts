@@ -6,6 +6,7 @@ import {
   EndSessionSchema,
   ExternalRequestSchema,
   SessionInfoSchema,
+  SetupCheckRecordSchema,
 } from './protocol-schemas';
 
 describe('external request schema', () => {
@@ -69,5 +70,16 @@ describe('protocol constants', () => {
   it('exposes only advisory SDK events', () => {
     expect(PROCTOR_EVENT_SOURCE).toBe('proctor-extension');
     expect(SDK_EVENTS).toEqual(['ready', 'consent_declined', 'ended']);
+  });
+});
+
+describe('SetupCheckRecordSchema', () => {
+  it('accepts a setup outcome and rejects anything else', () => {
+    const ok = { result: { face: 'ready', mic: 'needs_attention', performance: 'ready' }, ts: 1 };
+    expect(SetupCheckRecordSchema.parse(ok)).toEqual(ok);
+    expect(
+      SetupCheckRecordSchema.safeParse({ ...ok, result: { ...ok.result, face: 'ok' } }).success,
+    ).toBe(false);
+    expect(SetupCheckRecordSchema.safeParse({ ...ok, frame: 'x' }).success).toBe(false);
   });
 });

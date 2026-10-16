@@ -237,7 +237,7 @@ export function createChromeDeps(config: ExtensionConfig, uploader: Uploader): O
         await chrome.action.setBadgeBackgroundColor({ color: '#b91c1c' });
         await chrome.action.setBadgeText({ text: on ? 'ON' : '' });
         await chrome.action.setTitle({
-          title: on ? 'Proctoring: camera and microphone on' : 'Proctoring: inactive',
+          title: on ? 'Hawkeye: camera and microphone on' : 'Hawkeye: inactive',
         });
         await sendToTab(examTabId, { type: 'indicator', on });
       },

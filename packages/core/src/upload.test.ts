@@ -30,6 +30,8 @@ function item(over: Partial<QueueItemMeta> = {}): QueueItemMeta {
 describe('priorityFor', () => {
   it('sends the consent decision first, anomaly groups by severity, and the end record last', () => {
     expect(priorityFor('consent')).toBe(100);
+    expect(priorityFor('setup')).toBe(90);
+    expect(priorityFor('setup')).toBeGreaterThan(priorityFor('anomaly', 'high'));
     expect(priorityFor('end')).toBe(1);
     expect(priorityFor('end')).toBeLessThan(priorityFor('evidence', 'low'));
     expect(priorityFor('anomaly', 'high')).toBeGreaterThan(priorityFor('anomaly', 'medium'));

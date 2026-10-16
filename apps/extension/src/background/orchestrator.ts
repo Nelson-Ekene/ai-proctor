@@ -22,15 +22,18 @@ import {
   type SdkEventName,
   type SessionEvent,
   type SessionState,
+  type SetupCheckRecord,
 } from '@proctor/core';
 import { isAllowedOrigin, type ExtensionConfig } from '../config';
 import type { QueueItem, QueuedRequest } from '../shared/evidence-store';
 import {
+  FACE_MATCH_NOTICE_VERSION,
   InternalRequestSchema,
   NOTICE_VERSION,
   type InternalError,
   type AudioMetaRecord,
   type InternalResponse,
+  type SetupResult,
   type VideoMetaRecord,
 } from '../messages';
 import type { ApiClient } from './api-client';
@@ -54,6 +57,8 @@ export interface StoredSession {
   videoMeta?: VideoMetaRecord;
   /** Microphone monitoring state (Phase 5). */
   audioMeta?: AudioMetaRecord;
+  /** The candidate opted in to face matching on the consent notice (Phase 11). */
+  faceMatchConsent?: boolean;
 }
 
 export interface SessionAnomaly extends OpenAnomaly {
@@ -280,6 +285,13 @@ export class Orchestrator {
 
         case 'consent:decide':
           if (session.status !== 'awaiting_consent') return internalFail('wrong_state');
+          // Face-matching consent can only be given when the policy offers it.
+          if (
+            request.noticeVersion === FACE_MATCH_NOTICE_VERSION &&
+            !(request.accepted && session.policy.faceMatch.enabled)
+          ) {
+            return internalFail('invalid_request');
+          }
           return request.accepted
             ? this.accept(stored, request.noticeVersion, sender.tabId)
             : this.decline(stored, request.noticeVersion);
@@ -290,14 +302,19 @@ export class Orchestrator {
             : internalFail('wrong_state');
 
         case 'setup:complete':
-          return this.completeSetup(stored);
+          return this.completeSetup(stored, request.result);
 
         case 'media:state':
           return this.mediaChanged(stored, request.on);
 
         case 'video:config':
           return session.status === 'active'
-            ? { ok: true, policy: session.policy, sessionId: session.sessionId }
+            ? {
+                ok: true,
+                policy: session.policy,
+                sessionId: session.sessionId,
+                faceMatch: session.policy.faceMatch.enabled && stored.faceMatchConsent === true,
+              }
             : internalFail('wrong_state');
 
         case 'video:anomalies':
@@ -561,7 +578,10 @@ export class Orchestrator {
       this.deps.log?.('consent upload failed', error);
       return internalFail('api_error');
     }
-    const next = await this.save(stored, { type: 'consent_accepted', ts: this.deps.now() });
+    const next = await this.save(
+      noticeVersion === FACE_MATCH_NOTICE_VERSION ? { ...stored, faceMatchConsent: true } : stored,
+      { type: 'consent_accepted', ts: this.deps.now() },
+    );
     const tab = next.uiTabId ?? senderTab;
     if (tab !== undefined) await this.deps.tabs.showSetup(tab);
     return { ok: true } as const;
@@ -600,7 +620,10 @@ export class Orchestrator {
     return { ok: true } as const;
   }
 
-  private async completeSetup(stored: StoredSession): Promise<InternalResponse> {
+  private async completeSetup(
+    stored: StoredSession,
+    result: SetupResult,
+  ): Promise<InternalResponse> {
     if (stored.session.status !== 'setup') return internalFail('wrong_state');
     const activated = transition(stored.session, {
       type: 'setup_completed',
@@ -629,6 +652,28 @@ export class Orchestrator {
         rulesTickMinutes(policy),
       ),
     );
+    // The setup outcome (a device check, not an exam result) feeds the completion-rate metric.
+    // Best effort through the persistent queue: it never delays the session.
+    try {
+      const record: SetupCheckRecord = { result, ts: this.deps.now() };
+      await this.deps.uploads.enqueue([
+        this.queueItem(
+          activated,
+          'setup',
+          this.deps.newId(),
+          {},
+          {
+            method: 'POST',
+            path: `/v1/sessions/${encodeURIComponent(activated.sessionId)}/setup-check`,
+            contentType: 'application/json',
+            body: JSON.stringify(record),
+          },
+        ),
+      ]);
+      this.deps.uploads.kick();
+    } catch (error) {
+      this.deps.log?.('could not queue the setup-check record', error);
+    }
     try {
       await this.step('setup: capture.start', () => this.deps.capture.start());
     } catch (error) {

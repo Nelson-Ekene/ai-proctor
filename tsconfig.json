@@ -1,12 +1,29 @@
 {
   "files": [],
   "references": [
-    { "path": "packages/core" },
-    { "path": "packages/sdk" },
-    { "path": "packages/ui" },
-    { "path": "apps/extension" },
-    { "path": "apps/api" },
-    { "path": "apps/dashboard" },
-    { "path": "e2e" }
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/sdk"
+    },
+    {
+      "path": "packages/ui"
+    },
+    {
+      "path": "apps/extension"
+    },
+    {
+      "path": "apps/api"
+    },
+    {
+      "path": "apps/dashboard"
+    },
+    {
+      "path": "apps/demo-host"
+    },
+    {
+      "path": "e2e"
+    }
   ]
 }

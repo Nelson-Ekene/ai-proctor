@@ -3,8 +3,8 @@ import { VIOLATION_CATALOGUE, VIOLATION_TYPES, categoryOf } from './catalogue';
 import { DEFAULT_POLICY } from './policy';
 
 describe('violation catalogue', () => {
-  it('lists the 12 PRD violation types', () => {
-    expect(VIOLATION_TYPES).toHaveLength(12);
+  it('lists the 12 PRD violation types plus optional face matching', () => {
+    expect(VIOLATION_TYPES).toHaveLength(13);
     expect(Object.keys(VIOLATION_CATALOGUE).sort()).toEqual([...VIOLATION_TYPES].sort());
   });
 
@@ -19,6 +19,7 @@ describe('violation catalogue', () => {
     ['phone_detected', 'video', 'high'],
     ['book_or_notes', 'video', 'medium'],
     ['gaze_away_sustained', 'video', 'low'],
+    ['face_mismatch', 'video', 'medium'],
     ['speech_detected', 'audio', 'medium'],
     ['multiple_voices', 'audio', 'high'],
   ] as const)('%s is %s with default severity %s', (type, category, severity) => {

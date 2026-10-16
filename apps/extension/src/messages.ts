@@ -11,6 +11,8 @@ export const VideoMetaSchema = z.strictObject({
   degraded: z.boolean(),
   framesPerWindow: z.number().int().positive(),
   medianInferenceMs: z.number().nonnegative().optional(),
+  /** Face-matching progress (Phase 11); absent when face matching is off for the session. */
+  faceMatch: z.enum(['enrolling', 'enrolled']).optional(),
 });
 export type VideoMetaRecord = z.infer<typeof VideoMetaSchema>;
 
@@ -27,6 +29,8 @@ export type AudioMetaRecord = z.infer<typeof AudioMetaSchema>;
 
 /** Version of the consent notice text; bump when the wording changes. */
 export const NOTICE_VERSION = 'consent-notice-v1';
+/** Recorded instead when the candidate also opted in to face matching (Phase 11). */
+export { FACE_MATCH_NOTICE_VERSION } from '@proctor/core';
 
 export const CHECK_STATUSES = ['ready', 'needs_attention'] as const;
 export const CheckStatusSchema = z.enum(CHECK_STATUSES);
@@ -87,6 +91,8 @@ export type InternalResponse =
       policy?: Policy;
       /** video:config: session the evidence belongs to. */
       sessionId?: string;
+      /** video:config: face matching enabled by the policy and opted in to by the candidate. */
+      faceMatch?: boolean;
       /** content:get: recording indicator on for this tab. */
       on?: boolean;
       /** content:get: browser monitoring active for this tab, with its ping interval. */

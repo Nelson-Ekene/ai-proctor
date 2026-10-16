@@ -5,10 +5,24 @@ import { z } from 'zod';
 import type { AppDeps } from '../app';
 import { audit } from '../audit';
 import { requireUser, type UserPrincipal } from '../auth';
-import { apiKeys, auditLog, evidence, exams, sessions, userSessions, users } from '../db/schema';
-import { conflict, notFound, parse, unauthorised } from '../errors';
+import {
+  apiKeys,
+  auditLog,
+  evidence,
+  exams,
+  organisations,
+  reviewTimes,
+  sessions,
+  userSessions,
+  users,
+} from '../db/schema';
+import { badRequest, conflict, notFound, parse, tooManyRequests, unauthorised } from '../errors';
+import { LoginLimiter } from '../login-limiter';
+import { computeMetrics } from '../metrics';
+import { REGION_CONFIG, type Region } from '../regions';
 import { appendVersion, effectivePolicy, isUniqueViolation, listVersions } from '../policies';
 import { buildReport, renderReportPdf } from '../report';
+import { deleteSession } from '../retention';
 import { dummyPasswordHash, hashPassword, hashToken, newToken, verifyPassword } from '../security';
 
 // Dashboard routes (reviewer/admin). Every read of a session, report, export or evidence and
@@ -41,6 +55,15 @@ const CreateUserSchema = z.strictObject({
   password: z.string().min(12).max(1024),
   role: z.enum(['admin', 'reviewer']),
 });
+/** One report visit; capped at 4 h so a forgotten open tab cannot skew the metric. */
+const ReviewTimeSchema = z.strictObject({
+  ms: z
+    .number()
+    .int()
+    .min(0)
+    .max(4 * 60 * 60 * 1000),
+});
+const MetricsQuery = z.object({ since: z.iso.datetime().optional() });
 const AuditQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
   before: z.iso.datetime().optional(),
@@ -73,14 +96,35 @@ export function registerDashboardRoutes(app: FastifyInstance, deps: AppDeps): vo
     return exam;
   }
 
+  const limiter = new LoginLimiter(config.LOGIN_MAX_FAILURES, config.LOGIN_WINDOW_MS);
+
+  async function orgRegion(organisationId: string): Promise<Region> {
+    const [org] = await db
+      .select({ region: organisations.region })
+      .from(organisations)
+      .where(eq(organisations.id, organisationId));
+    return org?.region ?? 'eu';
+  }
+
   // --- auth ---------------------------------------------------------------------------------
 
-  app.post('/v1/auth/login', async (req) => {
+  app.post('/v1/auth/login', async (req, reply) => {
     const { email, password } = parse(LoginSchema, req.body);
+    const limitKey = `${req.ip}|${email.toLowerCase()}`;
+    const now = deps.now().getTime();
+    const wait = limiter.retryAfterMs(limitKey, now);
+    if (wait > 0) {
+      void reply.header('retry-after', String(Math.ceil(wait / 1000)));
+      throw tooManyRequests('too many sign-in attempts, try again later');
+    }
     const [found] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
     // Unknown e-mails still pay for a hash check, so timing does not reveal accounts.
     const ok = await verifyPassword(password, found?.passwordHash ?? (await dummyPasswordHash()));
-    if (!found || !ok) throw unauthorised();
+    if (!found || !ok) {
+      limiter.fail(limitKey, now);
+      throw unauthorised();
+    }
+    limiter.succeed(limitKey);
     const token = newToken('user');
     const expiresAt = new Date(deps.now().getTime() + config.USER_TOKEN_TTL_MS);
     await db
@@ -179,6 +223,25 @@ export function registerDashboardRoutes(app: FastifyInstance, deps: AppDeps): vo
       .send(built);
   });
 
+  /**
+   * Deletes a session with all its data and evidence objects (admin only): what the retention
+   * job does, on request. The audit trail keeps a record of the deletion. A session still
+   * running loses its later uploads (its token no longer resolves, so they are refused).
+   */
+  app.delete('/v1/sessions/:id', async (req, reply) => {
+    const principal = await admin(req);
+    const { id } = parse(UuidParams, req.params);
+    await ownSession(principal, id);
+    const objects = await deleteSession(db, storage, id);
+    await audit(db, principal.actor, {
+      action: 'session.delete',
+      targetType: 'session',
+      targetId: id,
+      details: { evidenceObjects: objects },
+    });
+    return reply.code(204).send();
+  });
+
   app.get('/v1/sessions/:id/report.pdf', async (req, reply) => {
     const principal = await user(req);
     const { id } = parse(UuidParams, req.params);
@@ -251,6 +314,13 @@ export function registerDashboardRoutes(app: FastifyInstance, deps: AppDeps): vo
     const examId = body.examId ?? null;
     if (examId) await ownExam(principal, examId);
     const policy = parse(PolicySchema, body.policy);
+    const region = await orgRegion(principal.organisationId);
+    const max = REGION_CONFIG[region].maxRetentionDays;
+    if (policy.retentionDays > max) {
+      throw badRequest(
+        `retentionDays: at most ${String(max)} days in ${REGION_CONFIG[region].label}`,
+      );
+    }
     const saved = await appendVersion(
       db,
       { organisationId: principal.organisationId, examId },
@@ -400,6 +470,34 @@ export function registerDashboardRoutes(app: FastifyInstance, deps: AppDeps): vo
       if (isUniqueViolation(error)) throw conflict('a user with this e-mail already exists');
       throw error;
     }
+  });
+
+  /** The caller's organisation and its region rules (shown on the policy screen). */
+  app.get('/v1/organisation', async (req) => {
+    const principal = await user(req);
+    const [org] = await db
+      .select({ id: organisations.id, name: organisations.name, region: organisations.region })
+      .from(organisations)
+      .where(eq(organisations.id, principal.organisationId));
+    if (!org) throw notFound();
+    return { ...org, regionConfig: REGION_CONFIG[org.region] };
+  });
+
+  /** Visible time a reviewer spent on a report (metric); sent by the dashboard on leaving. */
+  app.post('/v1/sessions/:id/review-time', async (req, reply) => {
+    const principal = await user(req);
+    const { id } = parse(UuidParams, req.params);
+    const { ms } = parse(ReviewTimeSchema, req.body);
+    await ownSession(principal, id);
+    await db.insert(reviewTimes).values({ sessionId: id, userId: principal.userId, ms });
+    return reply.status(204).send();
+  });
+
+  /** Pilot metrics (evidence linkage, setup-check completion, reviewer time). */
+  app.get('/v1/metrics', async (req) => {
+    const principal = await admin(req);
+    const { since } = parse(MetricsQuery, req.query);
+    return computeMetrics(db, principal.organisationId, since ? new Date(since) : null);
   });
 
   app.get('/v1/audit', async (req) => {

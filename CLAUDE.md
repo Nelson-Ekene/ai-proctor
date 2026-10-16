@@ -1,9 +1,10 @@
-# Project: AI Proctoring Extension
+# Project: Hawkeye (AI proctoring extension)
 Read BUILD_PLAN.md and docs/PRD.pdf before starting any task.
 
 ## Hard rules
 - Advisory only. No pass/fail/disqualify/block/end-test state anywhere in code, UI copy, API or DB.
-- No face recognition, no biometric templates, no identity verification.
+- No face identification: never match a face against a database, a name or another person. The only face comparison allowed is optional face matching (Phase 11, BUILD_PLAN section 11): same face as at the start of the session.
+- Face matching runs only when the policy enables it (`faceMatch.enabled`, default off) AND the candidate ticks the separate opt-in on the consent notice. The reference template and embeddings exist only in the offscreen document's memory: never stored, sent to the service worker or uploaded. `face_mismatch` is a flag for review with the reference and flagged frames as evidence, never an identity decision.
 - No screen recording or capture of test content. No full video/audio recording.
 - Raw media leaves the device only as sampled frames or anomaly audio clips.
 - Browser events: store event type + timestamp only (no URLs, no page content, no keystrokes).

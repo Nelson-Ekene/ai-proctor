@@ -10,7 +10,7 @@ const weight = z.number().min(0).max(1);
 export const SeveritySchema = z.enum(SEVERITIES);
 export const ViolationTypeSchema = z.enum(VIOLATION_TYPES);
 
-export const PolicySchema = z.strictObject({
+const PolicyObjectSchema = z.strictObject({
   weights: z
     .strictObject({ browser: weight, video: weight, audio: weight })
     .refine((w) => Math.abs(w.browser + w.video + w.audio - 1) <= WEIGHT_SUM_TOLERANCE, {
@@ -102,6 +102,25 @@ export const PolicySchema = z.strictObject({
     /** Spacing of the extra burst frames captured after an anomalous frame. */
     burstIntervalMs: positive,
   }),
+  /**
+   * Optional face matching (Phase 11): compares the face in each sampled frame with a reference
+   * taken on the device at the start of the session. Runs only when enabled here AND the
+   * candidate opted in separately on the consent notice. The reference exists only in the
+   * offscreen document's memory and is never stored or uploaded.
+   */
+  faceMatch: z.strictObject({
+    enabled: z.boolean(),
+    /** Consistent single-face samples averaged into the session's reference. */
+    enrolSamples: z.number().int().positive(),
+    /** Spacing of the extra reference frames taken right after the camera starts. */
+    enrolIntervalMs: positive,
+    /** How long those extra frames are taken; afterwards regular samples finish the reference. */
+    enrolMaxSeconds: positive,
+    /** Cosine similarity (-1 to 1) to the reference below which a face counts as different. */
+    minSimilarity: z.number().min(-1).max(1),
+    /** Consecutive sampled frames with a different face needed to raise face_mismatch. */
+    consecutiveSamples: z.number().int().positive(),
+  }),
   retentionDays: z.number().int().positive(),
   /** Evidence upload queue on the candidate's device (Phase 6). */
   upload: z
@@ -132,7 +151,29 @@ export const PolicySchema = z.strictObject({
   }),
 });
 
-export type Policy = z.infer<typeof PolicySchema>;
+/**
+ * Policies stored before Phase 11 (versions, session snapshots) have no face matching. They
+ * read as "face matching off" with the default face_mismatch severity; nothing else changes,
+ * so their scores are reproduced exactly.
+ */
+function upgradeLegacyPolicy(input: unknown): unknown {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return input;
+  const p = input as Record<string, unknown>;
+  const severities = p.severityByType;
+  const upgraded = { ...p };
+  if (!('faceMatch' in p)) upgraded.faceMatch = { ...DEFAULT_POLICY.faceMatch, enabled: false };
+  if (typeof severities === 'object' && severities !== null && !('face_mismatch' in severities)) {
+    upgraded.severityByType = {
+      ...severities,
+      face_mismatch: DEFAULT_POLICY.severityByType.face_mismatch,
+    };
+  }
+  return upgraded;
+}
+
+export const PolicySchema = z.preprocess(upgradeLegacyPolicy, PolicyObjectSchema);
+
+export type Policy = z.infer<typeof PolicyObjectSchema>;
 
 function deepFreeze<T>(value: T): T {
   if (typeof value === 'object' && value !== null) {
@@ -158,6 +199,9 @@ export const DEFAULT_POLICY: Policy = deepFreeze({
     phone_detected: 'high',
     book_or_notes: 'medium',
     gaze_away_sustained: 'low',
+    // ASSUMPTION: not in the PRD. Medium, not high: face matching has known error rates that
+    // vary with lighting, camera and demographics (docs/FAIRNESS.md).
+    face_mismatch: 'medium',
     speech_detected: 'medium',
     multiple_voices: 'high',
   },
@@ -196,6 +240,17 @@ export const DEFAULT_POLICY: Policy = deepFreeze({
     inferenceBudgetMs: 250,
     degradedFramesPerWindow: 3,
     burstIntervalMs: 1000,
+  },
+  faceMatch: {
+    // Off unless an organisation turns it on (biometric processing needs its own legal basis).
+    enabled: false,
+    // ASSUMPTION: none of these are in the PRD. minSimilarity is the SFace model's published
+    // cosine threshold (OpenCV Zoo); calibrate on pilot data (docs/FAIRNESS.md).
+    enrolSamples: 5,
+    enrolIntervalMs: 1000,
+    enrolMaxSeconds: 30,
+    minSimilarity: 0.363,
+    consecutiveSamples: 3,
   },
   retentionDays: 30, // ASSUMPTION: open question in PRD
   // ASSUMPTION: not in the PRD; tune in the pilot.

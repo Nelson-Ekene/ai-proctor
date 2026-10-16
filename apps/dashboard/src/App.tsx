@@ -1,6 +1,7 @@
 import { useAuth } from './auth';
 import { Link, parseRoute, useLocation } from './lib/router';
 import { LoginPage } from './pages/LoginPage';
+import { MetricsPage } from './pages/MetricsPage';
 import { PolicyPage } from './pages/PolicyPage';
 import { ReportPage } from './pages/ReportPage';
 import { SessionsPage } from './pages/SessionsPage';
@@ -25,10 +26,11 @@ export function App() {
     <div className="min-h-screen">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
-          <span className="mr-4 font-semibold">Proctoring review</span>
+          <span className="mr-4 font-semibold">Hawkeye</span>
           <nav className="flex gap-1" aria-label="Main">
             {nav('/', 'Sessions', route.name === 'sessions' || route.name === 'report')}
             {nav('/policy', 'Policy', route.name === 'policy')}
+            {me?.role === 'admin' && nav('/metrics', 'Metrics', route.name === 'metrics')}
           </nav>
           <div className="ml-auto flex items-center gap-3 text-sm text-slate-600">
             {me && (
@@ -50,6 +52,7 @@ export function App() {
         {route.name === 'sessions' && <SessionsPage />}
         {route.name === 'report' && <ReportPage sessionId={route.sessionId} />}
         {route.name === 'policy' && <PolicyPage />}
+        {route.name === 'metrics' && <MetricsPage />}
         {route.name === 'notFound' && <p>Page not found.</p>}
       </main>
     </div>

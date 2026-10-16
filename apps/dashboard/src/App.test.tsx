@@ -1,8 +1,9 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { tokenStore } from './api/client';
 import {
+  ADMIN,
   mockApi,
   prdReport,
   renderApp,
@@ -200,5 +201,116 @@ describe('report: trace every point to a violation and its evidence', () => {
     renderApp({ path: `/sessions/${SESSION_ID}` });
     await userEvent.click(await screen.findByText(/Policy used for this score/));
     expect(screen.getByText(/Browser 40%, video 40%, audio 20%/)).toBeInTheDocument();
+  });
+});
+
+describe('deleting a session', () => {
+  it('lets an admin delete after a second confirmation, then returns to the list', async () => {
+    let deleted = false;
+    const { calls } = reviewerApi({
+      'GET /v1/me': () => ADMIN,
+      [`DELETE /v1/sessions/${SESSION_ID}`]: () => {
+        deleted = true;
+        return new Response(null, { status: 204 });
+      },
+    });
+    renderApp({ path: `/sessions/${SESSION_ID}` });
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete session' }));
+    // Cancel first: nothing is sent.
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(deleted).toBe(false);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete session' }));
+    const dialog = screen.getByRole('alertdialog', { name: 'Delete session' });
+    expect(dialog).toHaveTextContent(/cannot be undone/);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete permanently' }));
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/');
+    });
+    expect(deleted).toBe(true);
+    expect(calls.filter((c) => c.startsWith('DELETE'))).toEqual([
+      `DELETE /v1/sessions/${SESSION_ID}`,
+    ]);
+  });
+
+  it('keeps the report and says so when deleting fails', async () => {
+    reviewerApi({
+      'GET /v1/me': () => ADMIN,
+      [`DELETE /v1/sessions/${SESSION_ID}`]: () =>
+        new Response(JSON.stringify({ error: 'storage unavailable' }), { status: 500 }),
+    });
+    renderApp({ path: `/sessions/${SESSION_ID}` });
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete session' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Delete permanently' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not delete the session/);
+    expect(window.location.pathname).toBe(`/sessions/${SESSION_ID}`);
+  });
+
+  it('is not offered to reviewers', async () => {
+    reviewerApi();
+    renderApp({ path: `/sessions/${SESSION_ID}` });
+    await screen.findByRole('button', { name: 'Export PDF' });
+    expect(screen.queryByRole('button', { name: 'Delete session' })).not.toBeInTheDocument();
+  });
+});
+
+describe('pilot metrics', () => {
+  it('reports visible review time when the reviewer leaves a report', async () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const sent: unknown[] = [];
+    reviewerApi({
+      [`POST /v1/sessions/${SESSION_ID}/review-time`]: (init) => {
+        sent.push(JSON.parse(init.body as string));
+        return new Response(null, { status: 204 });
+      },
+    });
+    renderApp({ path: `/sessions/${SESSION_ID}` });
+    await screen.findByTestId('risk-score');
+    now = 42_000;
+    await userEvent.click(screen.getByRole('link', { name: '← All sessions' }));
+    await waitFor(() => {
+      expect(sent).toEqual([{ ms: 42_000 }]);
+    });
+    clock.mockRestore();
+  });
+
+  it('shows admins the metrics and audit log', async () => {
+    mockApi({
+      'GET /v1/me': () => ADMIN,
+      'GET /v1/metrics': () => ({
+        since: null,
+        sessions: 4,
+        violations: { total: 10, withEvidence: 10, evidenceLinkedRate: 1 },
+        evidence: { referenced: 20, uploaded: 19, uploadedRate: 0.95 },
+        setupCheck: { consented: 4, completed: 3, completionRate: 0.75, allReady: 2 },
+        reviewerTime: { reviewedSessions: 2, medianMs: 90_000, p90Ms: 120_000, meanMs: 100_000 },
+      }),
+      'GET /v1/audit': () => [
+        {
+          id: 'a1',
+          actorType: 'user',
+          actorId: 'u2',
+          action: 'evidence.view',
+          targetType: 'evidence',
+          targetId: 's/e',
+          details: null,
+          ts: new Date(T0).toISOString(),
+        },
+      ],
+    });
+    renderApp({ path: '/metrics' });
+    expect(await screen.findByTestId('evidence-linked')).toHaveTextContent('100.0%');
+    expect(screen.getByTestId('setup-completion')).toHaveTextContent('75.0%');
+    expect(screen.getByTestId('review-median')).toHaveTextContent('1.5 min');
+    expect(screen.getByRole('table', { name: 'Audit log' })).toHaveTextContent('evidence.view');
+    expect(screen.getByRole('link', { name: 'Metrics' })).toBeInTheDocument();
+  });
+
+  it('hides metrics from reviewers', async () => {
+    reviewerApi();
+    renderApp();
+    await screen.findByRole('table', { name: 'Sessions ranked by risk' });
+    expect(screen.queryByRole('link', { name: 'Metrics' })).not.toBeInTheDocument();
   });
 });

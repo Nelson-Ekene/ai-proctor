@@ -40,6 +40,13 @@ const ConfigSchema = z.object({
     .int()
     .positive()
     .default(5 * 1024 * 1024),
+  /** Failed logins (same e-mail and address) allowed per LOGIN_WINDOW_MS before a pause. */
+  LOGIN_MAX_FAILURES: z.coerce.number().int().positive().default(10),
+  LOGIN_WINDOW_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(15 * 60 * 1000),
   /** Origins allowed to call reviewer/admin routes from a browser (dashboard). */
   CORS_ORIGINS: z
     .string()

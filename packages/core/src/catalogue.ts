@@ -1,4 +1,4 @@
-// Violation catalogue (PRD "Violation catalogue", BUILD_PLAN 5.2).
+// Violation catalogue (PRD "Violation catalogue", BUILD_PLAN 5.2; face_mismatch: Phase 11).
 // Structural facts only. Default severities are policy and live in DEFAULT_POLICY.
 
 export const CATEGORIES = ['browser', 'video', 'audio'] as const;
@@ -18,6 +18,7 @@ export const VIOLATION_TYPES = [
   'phone_detected',
   'book_or_notes',
   'gaze_away_sustained',
+  'face_mismatch',
   'speech_detected',
   'multiple_voices',
 ] as const;
@@ -42,6 +43,7 @@ export const VIOLATION_CATALOGUE: Readonly<Record<ViolationType, CatalogueEntry>
   phone_detected: { category: 'video', confidenceSource: 'model' },
   book_or_notes: { category: 'video', confidenceSource: 'model' },
   gaze_away_sustained: { category: 'video', confidenceSource: 'model' },
+  face_mismatch: { category: 'video', confidenceSource: 'model' },
   speech_detected: { category: 'audio', confidenceSource: 'model' },
   multiple_voices: { category: 'audio', confidenceSource: 'model' },
 });

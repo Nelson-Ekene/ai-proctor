@@ -1,7 +1,22 @@
-import { SEVERITY_LABELS, VIOLATION_LABELS, VIOLATION_TYPES, type Policy } from '@proctor/core';
+import {
+  FACE_MATCH_STATUS_LABELS,
+  SEVERITY_LABELS,
+  VIOLATION_LABELS,
+  VIOLATION_TYPES,
+  type FaceMatchStatus,
+  type Policy,
+} from '@proctor/core';
 
 /** The policy a report was scored with (the session's snapshot). */
-export function PolicySummary({ policy, versionId }: { policy: Policy; versionId: string | null }) {
+export function PolicySummary({
+  policy,
+  versionId,
+  faceMatch,
+}: {
+  policy: Policy;
+  versionId: string | null;
+  faceMatch?: FaceMatchStatus | undefined;
+}) {
   const w = policy.weights;
   return (
     <details className="rounded-lg border border-slate-200 bg-white p-4 text-sm">
@@ -37,6 +52,12 @@ export function PolicySummary({ policy, versionId }: { policy: Policy; versionId
         </dd>
         <dt className="text-slate-500">Retention</dt>
         <dd>{policy.retentionDays} days</dd>
+        {faceMatch && (
+          <>
+            <dt className="text-slate-500">Face matching</dt>
+            <dd>{FACE_MATCH_STATUS_LABELS[faceMatch]}</dd>
+          </>
+        )}
       </dl>
       <table className="mt-3 w-full max-w-md text-sm">
         <caption className="text-left text-slate-500">Severity per type</caption>

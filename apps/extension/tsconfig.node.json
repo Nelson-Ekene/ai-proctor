@@ -11,6 +11,8 @@
     "vitest.config.ts",
     "manifest.config.ts",
     "src/config.ts",
-    "src/manifest.ts"
+    "src/manifest.ts",
+    "src/release.ts",
+    "scripts/package.ts"
   ]
 }

@@ -8,12 +8,33 @@ export interface NoticeSection {
   items: string[];
 }
 
+/** Optional face matching (Phase 11): its own section and its own, unticked opt-in. */
+export interface FaceMatchNotice extends NoticeSection {
+  optInLabel: string;
+}
+
 export interface ConsentNotice {
   title: string;
   intro: string;
   sections: NoticeSection[];
+  /** Present only when the policy enables face matching. */
+  faceMatch?: FaceMatchNotice;
   agreeLabel: string;
   declineNote: string;
+}
+
+function faceMatchNotice(policy: Policy): FaceMatchNotice {
+  return {
+    heading: 'Optional: face matching',
+    items: [
+      'If you tick the box below, this tool also checks during the exam that the face on camera is the same as at the start. When the camera starts, it takes a few extra photos and turns your face into a set of numbers (a face template). This is biometric data.',
+      `The face template stays in this browser's memory only. It is never uploaded or saved, and it is deleted when the exam session ends.`,
+      `If the face looks different in ${plural(policy.faceMatch.consecutiveSamples, 'photo', 'photos')} in a row, that moment is flagged for a person to review, with one photo from the start of the session for comparison. Face matching makes mistakes (for example with poor lighting or glasses), so a person always looks at the photos. It never decides your result.`,
+      'This is your choice. If you leave the box unticked, everything else above still applies and face matching does not run.',
+    ],
+    optInLabel:
+      'I also agree to optional face matching as described above, including the processing of my biometric data on this device.',
+  };
 }
 
 function plural(n: number, one: string, many: string): string {
@@ -22,6 +43,7 @@ function plural(n: number, one: string, many: string): string {
 
 export function buildConsentNotice(policy: Policy): ConsentNotice {
   const { framesPerWindow, windowSeconds } = policy.sampling;
+  const faceMatch = policy.faceMatch.enabled;
   return {
     title: 'Before your exam: what this proctoring tool collects',
     intro:
@@ -40,7 +62,9 @@ export function buildConsentNotice(policy: Policy): ConsentNotice {
         items: [
           'No continuous video or audio recording, and no recording of your screen or the exam questions.',
           'No websites you visit, nothing you type, and nothing you paste.',
-          'No face recognition, identity checks or biometric templates.',
+          faceMatch
+            ? 'No face template is ever uploaded or saved, and nothing identifies you by name. Without your opt-in below, no face template is made at all.'
+            : 'No face recognition, identity checks or biometric templates.',
         ],
       },
       {
@@ -63,7 +87,10 @@ export function buildConsentNotice(policy: Policy): ConsentNotice {
         ],
       },
     ],
-    agreeLabel: 'I have read this notice and agree to the collection described above.',
+    ...(faceMatch ? { faceMatch: faceMatchNotice(policy) } : {}),
+    agreeLabel: faceMatch
+      ? 'I have read this notice and agree to the collection described above (except face matching, which is the separate choice below).'
+      : 'I have read this notice and agree to the collection described above.',
     declineNote:
       'If you do not agree, nothing is collected. Your exam provider is told that you declined and can explain your options.',
   };
@@ -75,6 +102,9 @@ export function noticeText(notice: ConsentNotice): string {
     notice.title,
     notice.intro,
     ...notice.sections.flatMap((s) => [s.heading, ...s.items]),
+    ...(notice.faceMatch
+      ? [notice.faceMatch.heading, ...notice.faceMatch.items, notice.faceMatch.optInLabel]
+      : []),
     notice.agreeLabel,
     notice.declineNote,
   ].join('\n');

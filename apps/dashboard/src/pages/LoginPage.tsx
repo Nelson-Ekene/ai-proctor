@@ -32,7 +32,8 @@ export function LoginPage() {
         onSubmit={(e) => void submit(e)}
         className="w-full max-w-sm space-y-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
       >
-        <h1 className="text-lg font-semibold">Proctoring review</h1>
+        <h1 className="text-lg font-semibold">Hawkeye</h1>
+        <p className="text-sm text-slate-500">See what matters.</p>
         <p className="text-sm text-slate-600">Sign in to review flagged sessions.</p>
         <label className="block text-sm">
           E-mail

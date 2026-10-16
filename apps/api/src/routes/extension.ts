@@ -2,6 +2,7 @@ import {
   AnomalySchema,
   ConsentRecordSchema,
   EndSessionSchema,
+  SetupCheckRecordSchema,
   type SessionInfo,
 } from '@proctor/core';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -10,11 +11,12 @@ import { z } from 'zod';
 import type { AppDeps } from '../app';
 import { audit } from '../audit';
 import { requireApiKey, requireSessionToken } from '../auth';
-import { consents, exams, idempotencyKeys, sessions } from '../db/schema';
-import { notFound, parse } from '../errors';
+import { consents, exams, idempotencyKeys, organisations, sessions } from '../db/schema';
+import { notFound, parse, unprocessable } from '../errors';
 import { storeEvidence } from '../evidence';
 import { ingestAnomaly } from '../ingest';
 import { effectivePolicy } from '../policies';
+import { REGION_CONFIG } from '../regions';
 import { hashToken, newToken } from '../security';
 
 // Integrator and extension routes (BUILD_PLAN 5.5). The extension's uploader retries with the
@@ -98,6 +100,15 @@ export function registerExtensionRoutes(app: FastifyInstance, deps: AppDeps): vo
     const { id } = parse(SessionParams, req.params);
     const principal = await requireSessionToken(db, req, deps.now(), id);
     const record = parse(ConsentRecordSchema, req.body);
+    const [org] = await db
+      .select({ region: organisations.region })
+      .from(organisations)
+      .where(eq(organisations.id, principal.organisationId));
+    const region = REGION_CONFIG[org?.region ?? 'eu'];
+    if (!region.consentNoticeVersions.includes(record.noticeVersion)) {
+      // Non-retryable: capture must not start under a notice that is not valid in this region.
+      throw unprocessable(`consent notice ${record.noticeVersion} is not valid in ${region.label}`);
+    }
     const key = idempotencyKey(req);
     const stored = await db.transaction(async (tx) => {
       if (key !== undefined) {
@@ -151,6 +162,21 @@ export function registerExtensionRoutes(app: FastifyInstance, deps: AppDeps): vo
       return reply.status(201).send({ ok: true });
     },
   );
+
+  /** Setup-check outcome (device check, never an exam result); the first record counts. */
+  app.post('/v1/sessions/:id/setup-check', async (req, reply) => {
+    const { id } = parse(SessionParams, req.params);
+    const principal = await requireSessionToken(db, req, deps.now(), id);
+    const record = parse(SetupCheckRecordSchema, req.body);
+    const updated = await db
+      .update(sessions)
+      .set({ setupResult: record.result, setupCompletedAt: deps.now() })
+      .where(and(eq(sessions.id, principal.sessionId), isNull(sessions.setupCompletedAt)))
+      .returning({ id: sessions.id });
+    return updated.length > 0
+      ? reply.status(201).send({ ok: true })
+      : reply.status(200).send({ ok: true, duplicate: true });
+  });
 
   app.post('/v1/sessions/:id/end', async (req, reply) => {
     const { id } = parse(SessionParams, req.params);

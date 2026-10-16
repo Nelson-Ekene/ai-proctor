@@ -8,7 +8,9 @@
     "mock": "tsx mock-server.ts",
     "test": "playwright test",
     "loop": "node scripts/loop.mjs",
-    "test:dashboard": "playwright test -c playwright.dashboard.config.ts"
+    "test:dashboard": "playwright test -c playwright.dashboard.config.ts",
+    "test:fullstack": "playwright test -c playwright.fullstack.config.ts",
+    "test:fairness": "playwright test -c playwright.fairness.config.ts"
   },
   "dependencies": {
     "@proctor/core": "workspace:*"

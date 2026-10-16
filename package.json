@@ -1,5 +1,5 @@
 {
-  "name": "ai-proctor",
+  "name": "hawkeye",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.34.6",
@@ -9,12 +9,15 @@
   "scripts": {
     "test": "vitest run --coverage",
     "test:watch": "vitest",
-    "test:e2e": "pnpm --filter @proctor/sdk build && pnpm --filter @proctor/extension build && pnpm --filter @proctor/e2e test && pnpm --filter @proctor/e2e test:dashboard",
+    "test:e2e": "pnpm --filter @proctor/sdk build && pnpm --filter @proctor/extension build && pnpm --filter @proctor/e2e test && pnpm --filter @proctor/e2e test:dashboard && pnpm --filter @proctor/e2e test:fullstack && pnpm --filter @proctor/e2e test:fairness",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
     "typecheck": "tsc -b",
     "clean": "tsc -b --clean",
-    "test:e2e:dashboard": "pnpm --filter @proctor/e2e test:dashboard"
+    "test:e2e:dashboard": "pnpm --filter @proctor/e2e test:dashboard",
+    "demo": "node scripts/demo.mjs",
+    "test:e2e:fullstack": "pnpm --filter @proctor/sdk build && pnpm --filter @proctor/extension build && pnpm --filter @proctor/e2e test:fullstack",
+    "test:e2e:fairness": "pnpm --filter @proctor/e2e test:fairness"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

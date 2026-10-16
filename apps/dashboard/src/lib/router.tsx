@@ -1,16 +1,18 @@
 import { useSyncExternalStore, type AnchorHTMLAttributes, type MouseEvent } from 'react';
 
-// A tiny history router: the dashboard has four screens, so a routing library is not needed.
+// A tiny history router: the dashboard has a handful of screens, so a routing library is not needed.
 
 export type Route =
   | { name: 'sessions' }
   | { name: 'report'; sessionId: string }
   | { name: 'policy' }
+  | { name: 'metrics' }
   | { name: 'notFound' };
 
 export function parseRoute(pathname: string): Route {
   if (pathname === '/' || pathname === '/sessions') return { name: 'sessions' };
   if (pathname === '/policy') return { name: 'policy' };
+  if (pathname === '/metrics') return { name: 'metrics' };
   const report = /^\/sessions\/([^/]+)$/.exec(pathname);
   if (report?.[1]) return { name: 'report', sessionId: decodeURIComponent(report[1]) };
   return { name: 'notFound' };

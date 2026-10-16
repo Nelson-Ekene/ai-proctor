@@ -11,7 +11,7 @@ import type { Policy } from './policy';
 // - Anomalies and their evidence form a group that is evicted as a whole, so no anomaly can
 //   reach the server without its evidence.
 
-export const QUEUE_KINDS = ['consent', 'end', 'anomaly', 'evidence'] as const;
+export const QUEUE_KINDS = ['consent', 'setup', 'end', 'anomaly', 'evidence'] as const;
 export type QueueKind = (typeof QUEUE_KINDS)[number];
 
 export interface QueueItemMeta {
@@ -41,6 +41,7 @@ const SEVERITY_RANK: Record<Severity, number> = { low: 1, medium: 2, high: 3 };
  */
 export function priorityFor(kind: QueueKind, severity?: Severity): number {
   if (kind === 'consent') return 100;
+  if (kind === 'setup') return 90;
   if (kind === 'end') return 1;
   return 10 + (severity ? SEVERITY_RANK[severity] : 0);
 }

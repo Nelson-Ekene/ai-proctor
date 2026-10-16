@@ -19,6 +19,9 @@ export interface PolicyForm {
   minConfidence: number;
   maxClipSeconds: number;
   retentionDays: number;
+  faceMatchEnabled: boolean;
+  faceMatchMinSimilarity: number;
+  faceMatchConsecutiveSamples: number;
 }
 
 /** Removes float noise from conversions (0.07 * 100 = 7.000000000000001). */
@@ -45,6 +48,9 @@ export function toForm(p: Policy): PolicyForm {
     minConfidence: p.video.minConfidence,
     maxClipSeconds: p.audio.maxClipSeconds,
     retentionDays: p.retentionDays,
+    faceMatchEnabled: p.faceMatch.enabled,
+    faceMatchMinSimilarity: p.faceMatch.minSimilarity,
+    faceMatchConsecutiveSamples: p.faceMatch.consecutiveSamples,
   };
 }
 
@@ -72,6 +78,12 @@ export function fromForm(base: Policy, f: PolicyForm): Policy {
     video: { ...base.video, minConfidence: f.minConfidence },
     audio: { ...base.audio, maxClipSeconds: f.maxClipSeconds },
     retentionDays: f.retentionDays,
+    faceMatch: {
+      ...base.faceMatch,
+      enabled: f.faceMatchEnabled,
+      minSimilarity: f.faceMatchMinSimilarity,
+      consecutiveSamples: f.faceMatchConsecutiveSamples,
+    },
   };
 }
 

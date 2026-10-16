@@ -8,6 +8,9 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/dist/**',
       '**/build/**',
+      '**/build-release/**',
+      '**/build-diagnostics/**',
+      '**/release/**',
       '**/coverage/**',
       '**/public/vendor/**',
       '**/test-results/**',
@@ -42,7 +45,13 @@ export default tseslint.config(
     // Node scripts.
     files: ['**/scripts/**/*.mjs'],
     languageOptions: {
-      globals: { console: 'readonly', fetch: 'readonly', Buffer: 'readonly', process: 'readonly' },
+      globals: {
+        console: 'readonly',
+        fetch: 'readonly',
+        Buffer: 'readonly',
+        process: 'readonly',
+        setTimeout: 'readonly',
+      },
     },
   },
   {

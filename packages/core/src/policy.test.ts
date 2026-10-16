@@ -181,4 +181,54 @@ describe('policy validation', () => {
       /logRetentionSeconds/,
     );
   });
+
+  it('validates the face-matching section and keeps it off by default', () => {
+    expect(DEFAULT_POLICY.faceMatch.enabled).toBe(false);
+    expect(PolicySchema.safeParse(patched('faceMatch', 'minSimilarity', 1.1)).success).toBe(false);
+    expect(PolicySchema.safeParse(patched('faceMatch', 'minSimilarity', -1)).success).toBe(true);
+    expect(PolicySchema.safeParse(patched('faceMatch', 'enrolSamples', 0)).success).toBe(false);
+    expect(PolicySchema.safeParse(patched('faceMatch', 'consecutiveSamples', 1.5)).success).toBe(
+      false,
+    );
+    expect(PolicySchema.safeParse(patched('faceMatch', 'enrolIntervalMs', 0)).success).toBe(false);
+    expect(PolicySchema.safeParse(patched('faceMatch', 'enabled', 'yes')).success).toBe(false);
+  });
+});
+
+describe('policies stored before face matching (Phase 11)', () => {
+  function legacy(): Record<string, unknown> {
+    const p = draft() as Record<string, unknown>;
+    delete p.faceMatch;
+    delete (p.severityByType as Record<string, unknown>).face_mismatch;
+    return p;
+  }
+
+  it('read as face matching off, with the default face_mismatch severity', () => {
+    const p = parsePolicy(legacy());
+    expect(p.faceMatch).toEqual({ ...DEFAULT_POLICY.faceMatch, enabled: false });
+    expect(p.severityByType.face_mismatch).toBe(DEFAULT_POLICY.severityByType.face_mismatch);
+    // Everything else is unchanged, so old scores are reproduced exactly.
+    const { faceMatch: _f, severityByType: _s, ...rest } = p;
+    const { faceMatch: _df, severityByType: _ds, ...defaults } = DEFAULT_POLICY;
+    expect(rest).toEqual(defaults);
+  });
+
+  it('keep an explicit face-matching section and still reject other gaps', () => {
+    const p = draft();
+    const severities = p.severityByType as Record<string, unknown>;
+    delete severities.face_mismatch;
+    (p.faceMatch as Record<string, unknown>).enabled = true;
+    expect(parsePolicy(p).faceMatch.enabled).toBe(true);
+    const broken = legacy();
+    delete (broken.severityByType as Record<string, unknown>).no_face;
+    expect(PolicySchema.safeParse(broken).success).toBe(false);
+  });
+
+  it('pass non-objects through to validation unchanged', () => {
+    expect(PolicySchema.safeParse(null).success).toBe(false);
+    expect(PolicySchema.safeParse([]).success).toBe(false);
+    const p = legacy();
+    p.severityByType = 'none';
+    expect(PolicySchema.safeParse(p).success).toBe(false);
+  });
 });

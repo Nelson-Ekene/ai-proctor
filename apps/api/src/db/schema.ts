@@ -12,7 +12,7 @@ import {
   unique,
   uuid,
 } from 'drizzle-orm/pg-core';
-import type { EvidenceRef, Policy } from '@proctor/core';
+import type { EvidenceRef, Policy, SetupCheckRecord } from '@proctor/core';
 
 // Database schema (BUILD_PLAN 5.4). Advisory only: there is deliberately no column that
 // records a pass, fail or any other verdict; sessions carry a risk score and a band.
@@ -22,6 +22,7 @@ export const sessionStatusEnum = pgEnum('session_status', ['created', 'active', 
 export const evidenceKindEnum = pgEnum('evidence_kind', ['frame', 'audio', 'event_sequence']);
 export const consentDecisionEnum = pgEnum('consent_decision', ['accepted', 'declined']);
 export const actorTypeEnum = pgEnum('actor_type', ['user', 'api_key', 'session', 'system']);
+export const regionEnum = pgEnum('region', ['eu', 'uk', 'us', 'other']);
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 /** Epoch milliseconds from the device (anomaly/evidence/consent times). */
@@ -30,6 +31,8 @@ const epochMs = (name: string) => bigint(name, { mode: 'number' });
 export const organisations = pgTable('organisations', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
+  /** Data-protection region: caps retention and lists accepted consent notices (regions.ts). */
+  region: regionEnum('region').notNull().default('eu'),
   createdAt: ts('created_at').notNull().defaultNow(),
 });
 
@@ -119,6 +122,9 @@ export const sessions = pgTable(
     endedAt: ts('ended_at'),
     risk: doublePrecision('risk').notNull().default(0),
     band: text('band').notNull().default('low'),
+    /** Pre-test setup check outcome (a device check, never an exam result). */
+    setupResult: jsonb('setup_result').$type<SetupCheckRecord['result']>(),
+    setupCompletedAt: ts('setup_completed_at'),
   },
   (t) => [index('sessions_org_risk').on(t.organisationId, t.risk)],
 );
@@ -225,4 +231,21 @@ export const auditLog = pgTable(
     ts: ts('ts').notNull().defaultNow(),
   },
   (t) => [index('audit_org_ts').on(t.organisationId, t.ts)],
+);
+
+/** Visible time a reviewer spent on a session report (Phase 9 metric), one row per visit. */
+export const reviewTimes = pgTable(
+  'review_times',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    ms: integer('ms').notNull(),
+    ts: ts('ts').notNull().defaultNow(),
+  },
+  (t) => [index('review_times_session').on(t.sessionId)],
 );

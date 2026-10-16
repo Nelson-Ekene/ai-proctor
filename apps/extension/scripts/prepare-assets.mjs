@@ -29,6 +29,14 @@ const MODELS = [
     sha256: '64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff',
   },
   {
+    // SFace (OpenCV Zoo, Apache-2.0): face embeddings for optional face matching (Phase 11).
+    // fp32, not the 4x smaller int8 file: onnxruntime-web runs the int8 one ~6x slower
+    // (~1 s vs ~160 ms per face, docs/PERFORMANCE.md).
+    file: 'face_recognition_sface_2021dec.onnx',
+    url: 'https://huggingface.co/opencv/face_recognition_sface/resolve/main/face_recognition_sface_2021dec.onnx',
+    sha256: '0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79',
+  },
+  {
     // Silero VAD v5 (MIT): voice-activity probability per 32 ms frame at 16 kHz.
     file: 'silero_vad.onnx',
     url: 'https://raw.githubusercontent.com/snakers4/silero-vad/v5.1.2/src/silero_vad/data/silero_vad.onnx',

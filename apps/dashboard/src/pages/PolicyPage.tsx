@@ -152,6 +152,7 @@ export function PolicyPage() {
   const isAdmin = me?.role === 'admin';
   const queryClient = useQueryClient();
   const exams = useQuery({ queryKey: ['exams'], queryFn: api.exams });
+  const org = useQuery({ queryKey: ['organisation'], queryFn: api.organisation });
   const [examId, setExamId] = useState('');
   const view = useQuery({
     queryKey: ['policy', examId],
@@ -226,6 +227,12 @@ export function PolicyPage() {
           {view.data.effective.version !== null &&
             `, version ${String(view.data.effective.version)}`}
           .{!isAdmin && ' Only admins can change the policy.'}
+        </p>
+      )}
+      {org.data && (
+        <p className="text-sm text-slate-600" data-testid="region-note">
+          Region: {org.data.regionConfig.label}. Data is kept at most{' '}
+          {org.data.regionConfig.maxRetentionDays} days here, whatever the policy says.
         </p>
       )}
 
@@ -406,6 +413,40 @@ export function PolicyPage() {
                 value={form.retentionDays}
                 onChange={(n) => {
                   update((f) => ({ ...f, retentionDays: n }));
+                }}
+              />
+            </Group>
+
+            <Group title="Face matching (optional)">
+              <p className="text-xs text-slate-600">
+                Compares each sampled frame with a face reference taken on the candidate&apos;s
+                device at the start. Runs only for candidates who opt in on the consent notice. This
+                is biometric processing: check your legal basis before turning it on.
+              </p>
+              <label className="flex items-center justify-between gap-3 text-sm">
+                <span>Offer face matching to candidates</span>
+                <input
+                  type="checkbox"
+                  checked={form.faceMatchEnabled}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    update((f) => ({ ...f, faceMatchEnabled: checked }));
+                  }}
+                />
+              </label>
+              <NumberField
+                label="Minimum similarity to the reference"
+                step={0.01}
+                value={form.faceMatchMinSimilarity}
+                onChange={(n) => {
+                  update((f) => ({ ...f, faceMatchMinSimilarity: n }));
+                }}
+              />
+              <NumberField
+                label="Different-face frames in a row"
+                value={form.faceMatchConsecutiveSamples}
+                onChange={(n) => {
+                  update((f) => ({ ...f, faceMatchConsecutiveSamples: n }));
                 }}
               />
             </Group>

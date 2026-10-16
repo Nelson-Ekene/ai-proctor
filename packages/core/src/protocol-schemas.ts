@@ -36,3 +36,20 @@ export type ConsentRecord = z.infer<typeof ConsentRecordSchema>;
 /** POST /v1/sessions/:id/end */
 export const EndSessionSchema = z.strictObject({ ts: z.number().nonnegative() });
 export type EndSession = z.infer<typeof EndSessionSchema>;
+
+export const SETUP_CHECK_STATUSES = ['ready', 'needs_attention'] as const;
+const SetupCheckStatusSchema = z.enum(SETUP_CHECK_STATUSES);
+
+/**
+ * POST /v1/sessions/:id/setup-check: the outcome of the pre-test setup check (a device check,
+ * never part of the exam result). Feeds the setup-check completion metric.
+ */
+export const SetupCheckRecordSchema = z.strictObject({
+  result: z.strictObject({
+    face: SetupCheckStatusSchema,
+    mic: SetupCheckStatusSchema,
+    performance: SetupCheckStatusSchema,
+  }),
+  ts: z.number().nonnegative(),
+});
+export type SetupCheckRecord = z.infer<typeof SetupCheckRecordSchema>;

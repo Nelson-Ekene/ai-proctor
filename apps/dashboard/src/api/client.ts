@@ -1,9 +1,12 @@
 import type {
+  AuditEntry,
   EventSequence,
   EvidenceUrl,
   Exam,
   LoginResponse,
   Me,
+  Metrics,
+  Organisation,
   PolicyView,
   SessionList,
   SessionReport,
@@ -112,6 +115,20 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ policy, ...(examId ? { examId } : {}) }),
     }),
+  organisation: () => json<Organisation>('/v1/organisation'),
+  metrics: () => json<Metrics>('/v1/metrics'),
+  audit: (limit = 100) => json<AuditEntry[]>(`/v1/audit?limit=${String(limit)}`),
+  /** Reports visible review time; keepalive so it survives leaving the page. */
+  reviewTime: async (sessionId: string, ms: number) => {
+    await request(`/v1/sessions/${enc(sessionId)}/review-time`, {
+      method: 'POST',
+      body: JSON.stringify({ ms: Math.round(ms) }),
+      keepalive: true,
+    });
+  },
+  /** Permanently deletes a session, its data and its evidence (admin only). */
+  deleteSession: (sessionId: string) =>
+    json<undefined>(`/v1/sessions/${enc(sessionId)}`, { method: 'DELETE' }),
   removeOverride: (examId: string) =>
     json<{ version: number }>(`/v1/policies/exams/${enc(examId)}`, { method: 'DELETE' }),
 };

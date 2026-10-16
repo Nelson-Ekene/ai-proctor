@@ -7,6 +7,12 @@
     "types": ["node", "chrome"],
     "allowImportingTsExtensions": true
   },
-  "include": ["*.ts", "tests/**/*.ts", "dashboard/**/*.ts"],
+  "include": [
+    "*.ts",
+    "tests/**/*.ts",
+    "dashboard/**/*.ts",
+    "fullstack/**/*.ts",
+    "fairness/**/*.ts"
+  ],
   "references": [{ "path": "../packages/core" }]
 }

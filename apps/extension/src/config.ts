@@ -7,9 +7,14 @@ export interface ExtensionConfig {
   apiOrigins: string[];
 }
 
+/**
+ * Development/test origins (localhost only): the mock host/API (4400/4401), the demo exam site
+ * and real API of `pnpm demo` (4500/4000), and the full-stack e2e suite (4620/4621). Store
+ * builds must set real https origins (`pnpm --filter @proctor/extension package` enforces it).
+ */
 export const DEV_DEFAULTS = {
-  PROCTOR_EXAM_ORIGINS: 'http://localhost:4400',
-  PROCTOR_API_ORIGINS: 'http://localhost:4401',
+  PROCTOR_EXAM_ORIGINS: 'http://localhost:4400,http://localhost:4500,http://localhost:4620',
+  PROCTOR_API_ORIGINS: 'http://localhost:4401,http://localhost:4000,http://localhost:4621',
 } as const;
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);

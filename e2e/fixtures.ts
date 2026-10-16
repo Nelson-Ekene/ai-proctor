@@ -64,6 +64,8 @@ export interface LaunchOptions {
   fakeVideo?: VideoFixtureName | undefined;
   fakeAudio?: AudioFixtureName | undefined;
   videoDir?: string;
+  /** Extra Chromium switches (e.g. a DevTools port for performance measurements). */
+  args?: string[];
 }
 
 /** Real Chromium with the built extension and fake media devices. */
@@ -78,6 +80,7 @@ export async function launchExtensionContext(opts: LaunchOptions): Promise<Brows
       '--use-fake-ui-for-media-stream',
       ...(fakeVideo ? [`--use-file-for-fake-video-capture=${videoFixturePath(fakeVideo)}`] : []),
       ...(fakeAudio ? [`--use-file-for-fake-audio-capture=${audioFixturePath(fakeAudio)}`] : []),
+      ...(opts.args ?? []),
     ],
     ...(opts.videoDir ? { recordVideo: { dir: opts.videoDir } } : {}),
   });

@@ -1,4 +1,4 @@
-import { NOTICE_VERSION } from '../messages';
+import { FACE_MATCH_NOTICE_VERSION, NOTICE_VERSION } from '../messages';
 import { el, send } from '../shared/runtime';
 import { buildConsentNotice } from './consent-copy';
 
@@ -47,10 +47,33 @@ async function main(): Promise<void> {
   );
   label.htmlFor = checkbox.id;
 
+  // Optional face matching: a separate, unticked choice that never gates "I agree".
+  const faceMatchBox = el('input', { id: 'face-match-checkbox' });
+  faceMatchBox.type = 'checkbox';
+  const faceMatch: HTMLElement[] = [];
+  if (notice.faceMatch) {
+    const optIn = el(
+      'label',
+      { className: 'agree' },
+      faceMatchBox,
+      document.createTextNode(notice.faceMatch.optInLabel),
+    );
+    optIn.htmlFor = faceMatchBox.id;
+    faceMatch.push(
+      el('h2', { text: notice.faceMatch.heading }),
+      el('ul', {}, ...notice.faceMatch.items.map((item) => el('li', { text: item }))),
+      optIn,
+    );
+  }
+
   const decide = async (accepted: boolean) => {
     agree.disabled = decline.disabled = retry.disabled = true;
     error.hidden = true;
-    const result = await send({ type: 'consent:decide', accepted, noticeVersion: NOTICE_VERSION });
+    const noticeVersion =
+      accepted && notice.faceMatch && faceMatchBox.checked
+        ? FACE_MATCH_NOTICE_VERSION
+        : NOTICE_VERSION;
+    const result = await send({ type: 'consent:decide', accepted, noticeVersion });
     if (result.ok) return; // the service worker navigates to setup or closes this tab
     if (result.error === 'wrong_state') {
       inactive();
@@ -75,6 +98,7 @@ async function main(): Promise<void> {
       el('ul', {}, ...s.items.map((item) => el('li', { text: item }))),
     ]),
     label,
+    ...faceMatch,
     el('div', { className: 'actions' }, agree, decline),
     error,
     el('p', { className: 'muted', text: notice.declineNote }),

@@ -10,3 +10,6 @@ docs/*.pdf
 # Hand-written planning docs; keep as authored
 BUILD_PLAN.md
 CLAUDE.md
+build-release
+build-diagnostics
+release

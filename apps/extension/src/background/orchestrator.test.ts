@@ -414,6 +414,41 @@ describe('setup and capture', () => {
     expect(await h.orch.handleInternal({ type: 'setup:get' }, page)).toMatchObject({ ok: true });
   });
 
+  it('queues the setup-check outcome for the completion metric', async () => {
+    await h.orch.handleExternal(START, fromExam);
+    await h.orch.handleInternal(
+      { type: 'consent:decide', accepted: true, noticeVersion: 'v1' },
+      page,
+    );
+    const result = { face: 'needs_attention', mic: 'ready', performance: 'ready' } as const;
+    expect(await h.orch.handleInternal({ type: 'setup:complete', result }, page)).toEqual({
+      ok: true,
+    });
+    const item = h.queued.find((i) => i.kind === 'setup');
+    expect(item?.priority).toBe(90);
+    expect(item?.request.path).toMatch(/\/setup-check$/);
+    expect(JSON.parse(item?.request.body ?? '{}') as unknown).toEqual({
+      result,
+      ts: expect.any(Number) as number,
+    });
+  });
+
+  it('starts the session even if the setup-check record cannot be queued', async () => {
+    h.deps.uploads.enqueue.mockRejectedValueOnce(new Error('storage full'));
+    await h.orch.handleExternal(START, fromExam);
+    await h.orch.handleInternal(
+      { type: 'consent:decide', accepted: true, noticeVersion: 'v1' },
+      page,
+    );
+    expect(
+      await h.orch.handleInternal(
+        { type: 'setup:complete', result: { face: 'ready', mic: 'ready', performance: 'ready' } },
+        page,
+      ),
+    ).toEqual({ ok: true });
+    expect(h.deps.capture.start).toHaveBeenCalled();
+  });
+
   it('reports a capture start failure', async () => {
     h.deps.capture.start.mockRejectedValueOnce(new Error('no offscreen'));
     await h.orch.handleExternal(START, fromExam);
@@ -821,6 +856,82 @@ describe('video sampling messages (phase 4)', () => {
     await toActive(h);
     await h.orch.handleInternal({ type: 'video:meta', meta }, offscreen);
     expect(h.stored()?.videoMeta).toEqual(meta);
+  });
+});
+
+describe('face-matching consent (phase 11)', () => {
+  const offscreen: InternalSender = { kind: 'extension_page', tabId: undefined };
+  const FACE_MATCH_NOTICE = 'consent-notice-v1+face-match-v1';
+
+  function withFaceMatch(enabled: boolean) {
+    const h = setup();
+    vi.mocked(h.deps.api.fetchSession).mockResolvedValue({
+      sessionId: 's1',
+      policySnapshot: parsePolicy({
+        ...DEFAULT_POLICY,
+        faceMatch: { ...DEFAULT_POLICY.faceMatch, enabled },
+      }),
+    });
+    return h;
+  }
+
+  async function activeAfter(h: Harness, noticeVersion: string) {
+    await h.orch.handleExternal(START, fromExam);
+    const decided = await h.orch.handleInternal(
+      { type: 'consent:decide', accepted: true, noticeVersion },
+      page,
+    );
+    await h.orch.handleInternal(
+      { type: 'setup:complete', result: { face: 'ready', mic: 'ready', performance: 'ready' } },
+      page,
+    );
+    return decided;
+  }
+
+  const config = async (h: Harness) =>
+    h.orch.handleInternal({ type: 'video:config' }, offscreen) as Promise<{ faceMatch?: boolean }>;
+
+  it('turns face matching on only with the policy AND the separate opt-in', async () => {
+    const optedIn = withFaceMatch(true);
+    expect(await activeAfter(optedIn, FACE_MATCH_NOTICE)).toEqual({ ok: true });
+    expect(optedIn.consents.map((c) => c.noticeVersion)).toEqual([FACE_MATCH_NOTICE]);
+    expect((await config(optedIn)).faceMatch).toBe(true);
+
+    const notOptedIn = withFaceMatch(true);
+    await activeAfter(notOptedIn, 'consent-notice-v1');
+    expect((await config(notOptedIn)).faceMatch).toBe(false);
+
+    const off = setup();
+    await toActive(off);
+    expect((await config(off)).faceMatch).toBe(false);
+  });
+
+  it('refuses a face-matching opt-in the policy does not offer', async () => {
+    const h = withFaceMatch(false);
+    expect(await activeAfter(h, FACE_MATCH_NOTICE)).toEqual({
+      ok: false,
+      error: 'invalid_request',
+    });
+    expect(h.consents).toEqual([]);
+    expect(h.stored()?.session.status).toBe('awaiting_consent');
+  });
+
+  it('refuses a face-matching notice on a decline', async () => {
+    const h = withFaceMatch(true);
+    await h.orch.handleExternal(START, fromExam);
+    expect(
+      await h.orch.handleInternal(
+        { type: 'consent:decide', accepted: false, noticeVersion: FACE_MATCH_NOTICE },
+        page,
+      ),
+    ).toEqual({ ok: false, error: 'invalid_request' });
+  });
+
+  it('does not keep the opt-in when recording the consent fails', async () => {
+    const h = withFaceMatch(true);
+    vi.mocked(h.deps.api.postConsent).mockRejectedValueOnce(new Error('offline'));
+    expect(await activeAfter(h, FACE_MATCH_NOTICE)).toEqual({ ok: false, error: 'api_error' });
+    expect(h.stored()?.faceMatchConsent).toBeUndefined();
   });
 });
 

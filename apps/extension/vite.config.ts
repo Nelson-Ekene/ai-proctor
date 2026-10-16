@@ -14,7 +14,8 @@ export default defineConfig({
     __PROCTOR_CONFIG__: JSON.stringify(parseExtensionConfig(process.env)),
   },
   build: {
-    outDir: 'build',
+    // PROCTOR_BUILD_DIR lets the fairness harness build a diagnostics variant next to `build`.
+    outDir: process.env.PROCTOR_BUILD_DIR ?? 'build',
     emptyOutDir: true,
     rollupOptions: {
       // Extension pages not referenced from the manifest.
@@ -22,6 +23,10 @@ export default defineConfig({
         consent: 'src/pages/consent.html',
         setup: 'src/pages/setup.html',
         offscreen: 'src/offscreen/offscreen.html',
+        // Model diagnostics for the fairness harness: never in normal or store builds.
+        ...(process.env.PROCTOR_DIAGNOSTICS === '1'
+          ? { diagnostics: 'src/pages/diagnostics.html' }
+          : {}),
       },
     },
   },

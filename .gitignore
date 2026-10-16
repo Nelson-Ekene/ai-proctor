@@ -12,3 +12,10 @@ e2e/.cache/
 !.env.example
 .DS_Store
 *.log
+# Extension release packages and the diagnostics build (fairness harness)
+release/
+build-release/
+build-diagnostics/
+
+# Private product spec - keep local, never push
+docs/PRD.pdf

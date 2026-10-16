@@ -7,7 +7,9 @@
   "scripts": {
     "prepare-assets": "node scripts/prepare-assets.mjs",
     "build": "node scripts/prepare-assets.mjs && vite build",
-    "build:dev": "node scripts/prepare-assets.mjs && vite build --mode development"
+    "build:dev": "node scripts/prepare-assets.mjs && vite build --mode development",
+    "build:diagnostics": "node scripts/prepare-assets.mjs && vite build --mode development",
+    "package": "node scripts/package.ts"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",

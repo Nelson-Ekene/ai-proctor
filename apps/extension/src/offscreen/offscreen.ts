@@ -3,12 +3,15 @@
 // - Phase 4: samples webcam frames; only frames tied to an anomaly (plus a burst) are stored.
 // - Phase 5: monitors the microphone continuously with Silero VAD; only clips of detected
 //   speech are stored. Silence never leaves memory.
+// - Phase 11 (optional): face matching against an in-memory reference taken at session start.
+//   Embeddings never leave this document.
 // Stored evidence waits for the Phase 6 upload queue. Nothing is uploaded from here.
-import { createPitchClusterDetector, type Policy } from '@proctor/core';
+import { createPitchClusterDetector, type Point, type Policy } from '@proctor/core';
 import { openEvidenceDb, putClip, putFrame } from '../shared/evidence-store';
+import { loadFaceEmbedder, type FaceEmbedder } from '../shared/face-embedder';
 import { send } from '../shared/runtime';
 import { VAD_SAMPLE_RATE, loadSileroVad } from '../shared/silero-vad';
-import { loadVisionModels, type VisionModels } from '../shared/vision-models';
+import { alignedFaceCrop, loadVisionModels, type VisionModels } from '../shared/vision-models';
 import { AudioMonitor } from './audio-monitor';
 import { VideoSampler, type CapturedFrame } from './sampler';
 
@@ -17,6 +20,8 @@ const EVIDENCE_JPEG_QUALITY = 0.8;
 
 interface BitmapFrame extends CapturedFrame {
   bitmap: ImageBitmap;
+  /** Set by analysis: where the main face's eyes, nose and mouth are (in memory only). */
+  faceKeypoints?: Point[];
 }
 
 /** Running analysers, reachable by the service worker's burst/stop requests. */
@@ -29,6 +34,27 @@ interface CaptureContext {
   policy: Policy;
   sessionId: string;
   db: IDBDatabase;
+  /** Face matching is on for this session (policy + candidate opt-in). */
+  faceMatch: boolean;
+}
+
+/** The embedder, or undefined (face matching then stays off for the session). */
+async function faceEmbedderFor(ctx: CaptureContext): Promise<FaceEmbedder | undefined> {
+  if (!ctx.faceMatch) return undefined;
+  try {
+    return await loadFaceEmbedder();
+  } catch (error) {
+    warn('face embedding model failed to load; face matching disabled', error);
+    return undefined;
+  }
+}
+
+async function embedFrame(
+  embedder: FaceEmbedder,
+  frame: BitmapFrame,
+): Promise<Float32Array | undefined> {
+  if (!frame.faceKeypoints) return undefined;
+  return embedder.embed(alignedFaceCrop(frame.bitmap, frame.faceKeypoints));
 }
 
 /** Logs locally and forwards to the service worker log (diagnostics; no media content). */
@@ -55,7 +81,8 @@ async function openCamera(): Promise<MediaStream | undefined> {
   }
 }
 
-async function startVideoSampling({ stream, policy, sessionId, db }: CaptureContext) {
+async function startVideoSampling(ctx: CaptureContext) {
+  const { stream, policy, sessionId, db } = ctx;
   const video = document.createElement('video');
   video.muted = true;
   video.playsInline = true;
@@ -69,8 +96,10 @@ async function startVideoSampling({ stream, policy, sessionId, db }: CaptureCont
     warn('vision models failed to load; video analysis disabled', error);
     return;
   }
+  const embedder = await faceEmbedderFor(ctx);
 
   sampler = new VideoSampler<BitmapFrame>({
+    ...(embedder ? { embed: (frame: BitmapFrame) => embedFrame(embedder, frame) } : {}),
     policy,
     now: () => Date.now(),
     rng: cryptoRng,
@@ -89,7 +118,11 @@ async function startVideoSampling({ stream, policy, sessionId, db }: CaptureCont
         },
       };
     },
-    analyze: (frame) => Promise.resolve(models.observe(frame.bitmap, frame.ts)),
+    analyze(frame) {
+      const { observation, inferenceMs, faceKeypoints } = models.observe(frame.bitmap, frame.ts);
+      if (faceKeypoints) frame.faceKeypoints = faceKeypoints;
+      return Promise.resolve({ observation, inferenceMs });
+    },
     async persist(frame) {
       const canvas = new OffscreenCanvas(frame.bitmap.width, frame.bitmap.height);
       const ctx = canvas.getContext('2d');
@@ -236,6 +269,7 @@ async function start(): Promise<void> {
     policy: config.policy,
     sessionId: config.sessionId,
     db: await openEvidenceDb(),
+    faceMatch: config.faceMatch === true,
   };
   // Independent channels: one failing to start must not stop the other.
   await Promise.allSettled([startVideoSampling(ctx), startAudioMonitoring(ctx)]);
