@@ -17,8 +17,8 @@ are not deployed. The extension is published to the Chrome Web Store.
 The API notices it is on Vercel (the `VERCEL` variable) and switches to `SERVERLESS` mode:
 
 - **Migrations** run at build time (`pnpm migrate`, the API service's build command), not on start.
-- **Retention** (deleting expired sessions) runs from a Vercel Cron job once a day at 03:00 UTC,
-  which calls `GET /v1/internal/retention` with `CRON_SECRET`. There is no timer.
+- **Retention** (deleting expired sessions) has no timer, and **no schedule is set up yet**, so
+  expired data is not deleted automatically on Vercel. See [Retention](#retention) below.
 - **Uploads** are capped at 4 MB (`MAX_EVIDENCE_BYTES`), under Vercel's 4.5 MB request limit.
 
 ## One-time setup
@@ -31,16 +31,15 @@ The API notices it is on Vercel (the `VERCEL` variable) and switches to `SERVERL
    (Cloudflare R2, AWS S3) and an access key for it.
 4. **Environment variables** (Settings → Environment Variables):
 
-| Variable        | Value                                                                 |
-| --------------- | --------------------------------------------------------------------- |
-| `DATABASE_URL`  | set by Neon (pooled URL)                                              |
-| `DB_PREPARE`    | `false` (required behind Neon's pooler)                               |
-| `S3_ENDPOINT`   | e.g. `https://<account>.r2.cloudflarestorage.com`                     |
-| `S3_REGION`     | `auto` for R2, the bucket's region for AWS                            |
-| `S3_BUCKET`     | `evidence`                                                            |
-| `S3_ACCESS_KEY` | storage access key id                                                 |
-| `S3_SECRET_KEY` | storage secret key                                                    |
-| `CRON_SECRET`   | a random string, at least 16 characters (e.g. `openssl rand -hex 32`) |
+| Variable        | Value                                             |
+| --------------- | ------------------------------------------------- |
+| `DATABASE_URL`  | set by Neon (pooled URL)                          |
+| `DB_PREPARE`    | `false` (required behind Neon's pooler)           |
+| `S3_ENDPOINT`   | e.g. `https://<account>.r2.cloudflarestorage.com` |
+| `S3_REGION`     | `auto` for R2, the bucket's region for AWS        |
+| `S3_BUCKET`     | `evidence`                                        |
+| `S3_ACCESS_KEY` | storage access key id                             |
+| `S3_SECRET_KEY` | storage secret key                                |
 
 5. **Deploy.**
 6. **Create the first logins:** copy the same database and storage values into `apps/api/.env` on
@@ -57,7 +56,18 @@ The API notices it is on Vercel (the `VERCEL` variable) and switches to `SERVERL
 - Upload one piece of evidence and confirm the storage accepts server-side encryption
   (`ServerSideEncryption: AES256`). AWS S3 does. Check this for other providers.
 - Exporting a report as PDF works.
-- Vercel → Settings → Cron Jobs lists `/v1/internal/retention`.
+
+## Retention
+
+On an always-on host the API deletes expired sessions every hour. On Vercel nothing runs between
+requests, so retention needs a scheduler, which is not set up yet. Before real candidates use the
+system, turn it on:
+
+1. Set `CRON_SECRET` (a random string of at least 16 characters, e.g. `openssl rand -hex 32`).
+   This enables `GET /v1/internal/retention`, which requires `Authorization: Bearer <CRON_SECRET>`.
+2. Call it on a schedule, for example by adding this to `vercel.json`:
+   `"crons": [{ "path": "/v1/internal/retention", "schedule": "0 3 * * *" }]`
+   (Vercel Cron sends the secret for you). It can also be called by hand with `curl`.
 
 ## Notes
 

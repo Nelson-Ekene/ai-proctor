@@ -12,10 +12,10 @@ const ConfigSchema = z.object({
   /**
    * Serverless host (on by default when VERCEL is set): nothing runs between requests, so the
    * server skips migrations on start (run `pnpm --filter @proctor/api migrate` at build) and the
-   * retention timer (a cron job calls GET /v1/internal/retention instead).
+   * retention timer (a scheduler must call GET /v1/internal/retention instead).
    */
   SERVERLESS: z.stringbool().default(false),
-  /** Bearer secret for GET /v1/internal/retention (Vercel Cron sends it). Unset: route is off. */
+  /** Bearer secret for GET /v1/internal/retention (e.g. sent by Vercel Cron). Unset: route is off. */
   CRON_SECRET: z.string().min(16).optional(),
   S3_ENDPOINT: z.url(),
   S3_REGION: z.string().default('us-east-1'),
