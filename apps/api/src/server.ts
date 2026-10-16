@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { buildApp } from './app';
 import { loadConfig } from './config';
 import { connect, runMigrations } from './db/client';
@@ -57,4 +58,9 @@ async function shutdown(): Promise<void> {
 process.once('SIGINT', () => void shutdown());
 process.once('SIGTERM', () => void shutdown());
 
-await app.listen({ port: config.PORT, host: config.HOST });
+// A serverless host calls the exported handler for each request instead of connecting to a port.
+await app.ready();
+export default function handler(req: IncomingMessage, res: ServerResponse): void {
+  app.server.emit('request', req, res);
+}
+if (!config.SERVERLESS) await app.listen({ port: config.PORT, host: config.HOST });
