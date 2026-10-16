@@ -1,0 +1,23 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "api": {
+      "root": "apps/api/",
+      "framework": "fastify",
+      "entrypoint": "src/server.ts",
+      "buildCommand": "pnpm migrate"
+    },
+    "dashboard": {
+      "root": "apps/dashboard/",
+      "framework": "vite",
+      "outputDirectory": "dist",
+      "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+    }
+  },
+  "rewrites": [
+    { "source": "/v1/(.*)", "destination": { "service": "api" } },
+    { "source": "/healthz", "destination": { "service": "api" } },
+    { "source": "/(.*)", "destination": { "service": "dashboard" } }
+  ],
+  "crons": [{ "path": "/v1/internal/retention", "schedule": "0 3 * * *" }]
+}

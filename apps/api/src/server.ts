@@ -4,11 +4,13 @@ import { connect, runMigrations } from './db/client';
 import { runRetention } from './retention';
 import { createS3Storage } from './storage';
 
-// Entry point: `pnpm --filter @proctor/api dev` (reads apps/api/.env if present).
+// Entry point: `pnpm --filter @proctor/api dev` (reads apps/api/.env if present), and the Vercel
+// function (vercel.json). On a serverless host migrations run at build and retention runs from a
+// cron job (see SERVERLESS in config.ts).
 
 const config = loadConfig();
-await runMigrations(config.DATABASE_URL);
-const database = connect(config.DATABASE_URL);
+if (!config.SERVERLESS) await runMigrations(config.DATABASE_URL);
+const database = connect(config.DATABASE_URL, { prepare: config.DB_PREPARE });
 const storage = createS3Storage({
   endpoint: config.S3_ENDPOINT,
   publicEndpoint: config.S3_PUBLIC_ENDPOINT,
@@ -42,8 +44,10 @@ async function retention(): Promise<void> {
     retentionRunning = false;
   }
 }
-const timer = setInterval(() => void retention(), config.RETENTION_INTERVAL_MS);
-void retention();
+const timer = config.SERVERLESS
+  ? undefined
+  : setInterval(() => void retention(), config.RETENTION_INTERVAL_MS);
+if (timer) void retention();
 
 async function shutdown(): Promise<void> {
   clearInterval(timer);

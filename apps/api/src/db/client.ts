@@ -14,8 +14,12 @@ export interface Database {
 
 const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'drizzle');
 
-export function connect(url: string): Database {
-  const client = postgres(url, { max: 10, onnotice: () => undefined });
+export function connect(url: string, options: { prepare?: boolean } = {}): Database {
+  const client = postgres(url, {
+    max: 10,
+    prepare: options.prepare ?? true,
+    onnotice: () => undefined,
+  });
   return {
     db: drizzle(client, { schema }),
     close: () => client.end({ timeout: 5 }),

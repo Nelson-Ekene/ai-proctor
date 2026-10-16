@@ -33,7 +33,7 @@ export interface TestContext {
 let passwordHash: Promise<string> | undefined;
 
 /** A fresh database + bucket + app, with two organisations (A and B) each having users and a key. */
-export async function createTestContext(): Promise<TestContext> {
+export async function createTestContext(env: Record<string, string> = {}): Promise<TestContext> {
   const suffix = randomBytes(6).toString('hex');
   const baseUrl = inject('databaseUrl');
   const admin = postgres(baseUrl, { max: 1, onnotice: () => undefined });
@@ -50,6 +50,7 @@ export async function createTestContext(): Promise<TestContext> {
     S3_BUCKET: `evidence-${suffix}`,
     S3_ACCESS_KEY: inject('s3AccessKey'),
     S3_SECRET_KEY: inject('s3SecretKey'),
+    ...env,
   });
   const database = connect(databaseUrl);
   const storage = createS3Storage({

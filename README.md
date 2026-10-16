@@ -147,6 +147,7 @@ models bundled.
 | ------------------------------------------- | ------------------------------------------------------- |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md)     | how each part works, scoring, API, design decisions     |
 | [DEVELOPMENT.md](docs/DEVELOPMENT.md)       | running parts separately, tests, debugging, releasing   |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md)         | deploying to Vercel (Neon + S3 storage)                 |
 | [PRIVACY_REVIEW.md](docs/PRIVACY_REVIEW.md) | each privacy requirement and the test that proves it    |
 | [FAIRNESS.md](docs/FAIRNESS.md)             | how detection holds up across lighting, cameras, people |
 | [PERFORMANCE.md](docs/PERFORMANCE.md)       | CPU, memory and upload budgets                          |

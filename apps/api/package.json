@@ -30,6 +30,7 @@
     "dev": "node --env-file-if-exists=.env --watch --import tsx src/server.ts",
     "start": "node --env-file-if-exists=.env --import tsx src/server.ts",
     "seed": "node --env-file-if-exists=.env --import tsx src/seed.ts",
+    "migrate": "node --env-file-if-exists=.env --import tsx src/migrate.ts",
     "db:generate": "drizzle-kit generate"
   }
 }

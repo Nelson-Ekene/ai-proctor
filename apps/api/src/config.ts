@@ -7,6 +7,16 @@ const ConfigSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   HOST: z.string().default('0.0.0.0'),
   DATABASE_URL: z.string().min(1),
+  /** Prepared statements. Turn off behind a transaction-mode pooler (Neon/Supabase pooled URL). */
+  DB_PREPARE: z.stringbool().default(true),
+  /**
+   * Serverless host (on by default when VERCEL is set): nothing runs between requests, so the
+   * server skips migrations on start (run `pnpm --filter @proctor/api migrate` at build) and the
+   * retention timer (a cron job calls GET /v1/internal/retention instead).
+   */
+  SERVERLESS: z.stringbool().default(false),
+  /** Bearer secret for GET /v1/internal/retention (Vercel Cron sends it). Unset: route is off. */
+  CRON_SECRET: z.string().min(16).optional(),
   S3_ENDPOINT: z.url(),
   S3_REGION: z.string().default('us-east-1'),
   S3_BUCKET: z.string().min(1).default('evidence'),
@@ -34,12 +44,15 @@ const ConfigSchema = z.object({
     .int()
     .positive()
     .default(60 * 60 * 1000),
-  /** Largest evidence body accepted (frames are ~50 KB, a 30 s WAV ~1 MB). */
+  /**
+   * Largest evidence body accepted (frames are ~50 KB, a 30 s WAV ~1 MB). Kept under Vercel's
+   * 4.5 MB request limit.
+   */
   MAX_EVIDENCE_BYTES: z.coerce
     .number()
     .int()
     .positive()
-    .default(5 * 1024 * 1024),
+    .default(4 * 1024 * 1024),
   /** Failed logins (same e-mail and address) allowed per LOGIN_WINDOW_MS before a pause. */
   LOGIN_MAX_FAILURES: z.coerce.number().int().positive().default(10),
   LOGIN_WINDOW_MS: z.coerce
@@ -62,5 +75,5 @@ const ConfigSchema = z.object({
 export type Config = z.infer<typeof ConfigSchema>;
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
-  return ConfigSchema.parse(env);
+  return ConfigSchema.parse({ SERVERLESS: env.VERCEL ? 'true' : undefined, ...env });
 }

@@ -5,6 +5,7 @@ import type { Db } from './db/client';
 import { HttpError } from './errors';
 import { registerDashboardRoutes } from './routes/dashboard';
 import { registerExtensionRoutes } from './routes/extension';
+import { registerInternalRoutes } from './routes/internal';
 import type { EvidenceStorage } from './storage';
 
 export interface AppDeps {
@@ -66,5 +67,6 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   app.get('/healthz', () => ({ ok: true }));
   registerExtensionRoutes(app, deps);
   registerDashboardRoutes(app, deps);
+  registerInternalRoutes(app, deps);
   return app;
 }
